@@ -156,6 +156,24 @@ public:
             {
                 return rank_;
             }
+        
+	    //- Construct by assembling and return a clone.
+            virtual autoPtr<GAMGInterfaceField> clone
+            (
+                const GAMGInterface& GAMGCp,
+                const UPtrList<lduInterfaceField>& other // other
+            ) const 
+	    {
+                NotImplemented;
+		return nullptr;
+	    }
+
+	    virtual void write(Ostream&) const
+	    {
+                NotImplemented;
+	    }
+
+
 };
 
 
