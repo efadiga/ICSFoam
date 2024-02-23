@@ -180,7 +180,7 @@ bool Foam::pseudotimeControl::loop()
         corr_ = 0;
         if (!steadyState_)
         {
-            mesh_.data::remove("finalIteration");
+            mesh_.data().remove("finalIteration");
         }
         return false;
     }
@@ -195,7 +195,7 @@ bool Foam::pseudotimeControl::loop()
 
             if (!steadyState_)
             {
-                mesh_.data::remove("finalIteration");
+                mesh_.data().remove("finalIteration");
             }
             corr_ = 0;
             converged_ = false;
@@ -209,7 +209,7 @@ bool Foam::pseudotimeControl::loop()
 
             if (!steadyState_)
             {
-                mesh_.data::add("finalIteration", true);
+                mesh_.data().add("finalIteration", true);
             }
             converged_ = true;
         }
@@ -220,7 +220,7 @@ bool Foam::pseudotimeControl::loop()
         {
             if (!steadyState_)
             {
-                mesh_.data::add("finalIteration", true);
+                mesh_.data().add("finalIteration", true);
             }
         }
 

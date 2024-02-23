@@ -289,7 +289,7 @@ void Foam::HBZone::updateHBOperators(const scalarList& selSnapshots)
 
 	Info<<"EInv "<<EInv_<<endl;
 
-	E_ = Foam::pinv(E_1);
+	E_ = Foam::MatrixTools::pinv(E_1);
 
 	Info<<"E "<<E_<<endl;
 
