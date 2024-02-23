@@ -186,7 +186,9 @@ Foam::tmp<Foam::labelField> Foam::overlapAMIFvPatch::interfaceInternalField
 	const labelUList& faceCells
 ) const
 {
-    return patchInternalField(internalData, faceCells);
+    auto tpfld = tmp<labelField>::New();
+    patchInternalField(internalData,faceCells,tpfld.ref());
+    return tpfld;
 }
 
 

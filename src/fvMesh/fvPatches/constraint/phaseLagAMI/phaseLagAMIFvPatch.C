@@ -182,7 +182,9 @@ Foam::tmp<Foam::labelField> Foam::phaseLagAMIFvPatch::interfaceInternalField
 	const labelUList& faceCells
 ) const
 {
-    return patchInternalField(internalData, faceCells);
+    auto tpfld = tmp<labelField>::New();
+    patchInternalField(internalData,faceCells,tpfld.ref());
+    return tpfld;
 }
 
 
