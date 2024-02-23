@@ -55,10 +55,11 @@ void Foam::blockFvMatrix<sourceType, blockType>::initProcessorInterfaces
                 (
                     result,
                     true,
-					this->lduAddr(),
-					interfacei,
+		    this->lduAddr(),
+		    interfacei,
                     psiif,
-					interfaceDummyCoeffs,
+		    interfaceDummyCoeffs,
+		    //0,
                     Pstream::defaultCommsType
                 );
             }
@@ -83,10 +84,11 @@ void Foam::blockFvMatrix<sourceType, blockType>::initProcessorInterfaces
                 (
                     result,
                     true,
-					this->lduAddr(),
-					interfacei,
+		    this->lduAddr(),
+		   interfacei,
                     psiif,
-					interfaceDummyCoeffs,
+		    interfaceDummyCoeffs,
+		    //0,
                     Pstream::commsTypes::blocking
                 );
             }
@@ -125,19 +127,21 @@ void Foam::blockFvMatrix<sourceType, blockType>::updateProcessorInterfaces
         commsType == Pstream::commsTypes::nonBlocking
      && !Pstream::floatTransfer
     )
-    {
-        // Fast path.
-        if
-        (
-            procField.outstandingRecvRequest() >= 0
-         && procField.outstandingRecvRequest() < Pstream::nRequests()
-        )
         {
-            UPstream::waitRequest(procField.outstandingRecvRequest());
-        }
-        // Recv finished so assume sending finished as well.
-        procField.outstandingSendRequest() = -1;
-        procField.outstandingRecvRequest() = -1;
+        // Fast path.
+	UPstream::waitRequest(procField.recvRequest()); procField.recvRequest() = -1;
+        if (UPstream::finishedRequest(procField.sendRequest())) procField.sendRequest() = -1;
+        //if
+        //(
+        //    procField.outstandingRecvRequest() >= 0
+        // && procField.outstandingRecvRequest() < Pstream::nRequests()
+        //)
+        //{
+        //    UPstream::waitRequest(procField.outstandingRecvRequest());
+        //}
+        //// Recv finished so assume sending finished as well.
+        //procField.outstandingSendRequest() = -1;
+        //procField.outstandingRecvRequest() = -1;
 
         // Consume straight from receiveBuf_
 
