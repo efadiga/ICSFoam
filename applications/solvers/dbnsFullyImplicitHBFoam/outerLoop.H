@@ -72,7 +72,7 @@ forAll(subTimeMeshes,K)
 	if (mesh.changing())
 	{
 		MRF[K].update();
-		subTimeMeshes[K].setPhi().oldTime();
+		subTimeMeshes[K].setPhi().ref().oldTime();
 	}
 
 	#include "setCoAndDeltaT.H"

@@ -21,6 +21,7 @@ EXE_LIBS = \
     -lcompressibleTurbulenceModels \
     -ldynamicMesh \
     -ldynamicFvMesh \
+    -lthermoTools \
     -ltopoChangerFvMesh \
     -lsampling \
     -L$(FOAM_USER_LIBBIN) \
