@@ -1,0 +1,7 @@
+src/Make/linux*
+src/lnInclude
+.vscode
+*.foam
+*cproject
+*project
+*settings
