@@ -288,7 +288,7 @@ residualsIO coupledMatrix::solve
 	PtrList<volVectorField>& vW
 )
 {
-    const dictionary& dict = mesh().solutionDict().subDict("flowSolver");
+	const dictionary& dict = mesh().solutionDict().subDict("solvers").subDict("flowSolver");
 
     return solve(dict, sW, vW);
 
@@ -303,7 +303,7 @@ residualsIO coupledMatrix::solveForIncr
 )
 {
 
-	const dictionary& dict = mesh().solutionDict().subDict("flowSolver");
+	const dictionary& dict = mesh().solutionDict().subDict("solvers").subDict("flowSolver");
 
     PtrList<scalarField> scalarSources(nScal_);
     PtrList<vectorField> vectorSources(nVect_);
