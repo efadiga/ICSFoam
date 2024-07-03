@@ -1,5 +1,5 @@
 #!/bin/sh
 
-wmake parallel/decomposeParHB
-wmake parallel/reconstructParHB
+wmake $(WM_ARGUMENTS) parallel/decomposeParHB
+wmake $(WM_ARGUMENTS) parallel/reconstructParHB
 

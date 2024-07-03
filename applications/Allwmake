@@ -1,8 +1,8 @@
 #!/bin/sh
 
-wmake solvers/dbnsFoam
-wmake solvers/dbnsFullyImplicitHBFoam
-wmake solvers/reconstructHBFoam
+wmake $(WM_ARGUMENTS) solvers/dbnsFoam
+wmake $(WM_ARGUMENTS) solvers/dbnsFullyImplicitHBFoam
+wmake $(WM_ARGUMENTS) solvers/reconstructHBFoam
 
 cd utilities && { ./Allwmake; cd ..; }
 
