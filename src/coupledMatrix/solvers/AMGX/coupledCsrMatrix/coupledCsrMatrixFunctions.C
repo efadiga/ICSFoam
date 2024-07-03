@@ -38,12 +38,14 @@ void Foam::coupledCsrMatrix::initializeAndApplyValue
 	const label nBlocks,
     const label nCells,
     const label nIntFaces,
+	const label nnzExt,
     const label nOffsets,
     const label * const offsets,
     const label  * const ldu2csr,
     const scalar * const diag,
     const scalar * const upper,
     const scalar * const lower,
+    const scalar * const ext,
           scalar * values
 )
 {
@@ -53,11 +55,13 @@ void Foam::coupledCsrMatrix::initializeAndApplyValue
         nCells,
         nIntFaces,
 		nOffsets,
+		nnzExt,
 		&offsets,
 		&ldu2csr,
         &diag,
         &upper,
         &lower,
+		&ext,
         &values
 	 ]
 	 (const auto& exec){ exec.initializeAndApplyValue
@@ -65,12 +69,14 @@ void Foam::coupledCsrMatrix::initializeAndApplyValue
                         	   nBlocks,
                                nCells,
                                nIntFaces,
+							   nnzExt,
 		                       nOffsets,
 		                       offsets,
 							   ldu2csr,
                                diag,
                                upper,
                                lower,
+							   ext,
                                values
 					       );
                        },

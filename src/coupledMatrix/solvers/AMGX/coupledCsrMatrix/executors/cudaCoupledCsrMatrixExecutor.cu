@@ -92,18 +92,27 @@ void cudaInitializeValueUL
 __global__
 void cudaInitializeValueExt
 (
+	const int   nBlocks,
     const int   nCells,
     const int   nIntFaces,
     const int   nnzExt,
+	const int   nOffsets,
+	const int * const offsets,
+	const int * const ldu2csr,
     const double * const extValues,
-          double * valuesTmp
+          double * values
 )
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if(i < nnzExt)
     {
-        valuesTmp[nCells + 2*nIntFaces + i] = extValues[i];
+    	for(int j=0; j<nOffsets;j++)
+    	{
+            values[nBlocks*nBlocks*ldu2csr[nCells + 2*nIntFaces + i]+offsets[j]] =
+                extValues[i*nOffsets + j];
+    	}
+        //valuesTmp[nCells + 2*nIntFaces + i] = extValues[i];
     }
 }
 
@@ -153,6 +162,42 @@ void cudaFillField
 // * * * * * * * * * * * * * *  Wrapper functions * * * * * * * * * * * * * * //
 
 template<class Type>
+void Foam::cudaCoupledCsrMatrixExecutor::concatenate
+(
+    label globSize,
+    List<List<Type>> lst,
+    scalar * ptr
+) const
+{
+    label newStart = 0;
+    label size;
+    const label nC = pTraits<Type>::nComponents;
+
+    for(label i=0; i<lst.size(); ++i)
+    {
+        size = lst[i].size();
+        label err = CHECK_CUDA_ERROR(
+                        cudaMemcpy
+						(
+                            &ptr[newStart*nC],
+							reinterpret_cast<const scalar*>(lst[i].cdata()),
+							(size_t) size*sizeof(scalar)*nC,
+							cudaMemcpyHostToDevice
+						)
+                    );
+        if (err != 0)
+        {
+            FatalErrorInFunction << "ERROR: cudaMemcpy returned " << err << abort(FatalError);
+        }
+        newStart += size;
+        if(newStart > globSize)
+        {
+            FatalErrorInFunction << "Concatenate size mismatch" << nl;
+        }
+    }
+}
+
+template<class Type>
 void Foam::cudaCoupledCsrMatrixExecutor::fillField
 (
 	const label nCells,
@@ -165,14 +210,14 @@ void Foam::cudaCoupledCsrMatrixExecutor::fillField
     const label nComps = pTraits<Type>::nComponents;
 
 	void* inPtr;
-    label err = CHECK_CUDA_ERROR(cudaMalloc((void**)&inPtr, (size_t) nCells*nBlocks*sizeof(scalar)));
+    label err = CHECK_CUDA_ERROR(cudaMalloc((void**)&inPtr, (size_t) nCells*nComps*sizeof(scalar)));
     if (err != 0)
     {
         FatalErrorInFunction << "ERROR: cudaMalloc returned " << err << abort(FatalError);
     }
 
     err = CHECK_CUDA_ERROR(cudaMemcpy(inPtr, reinterpret_cast<const scalar*>(input.cdata()),
-    		                             (size_t) nCells*nBlocks*sizeof(scalar), cudaMemcpyHostToDevice));
+    		                             (size_t) nCells*nComps*sizeof(scalar), cudaMemcpyHostToDevice));
     if (err != 0)
     {
         FatalErrorInFunction << "ERROR: cudaMemcpy returned " << err << abort(FatalError);
@@ -190,23 +235,23 @@ void Foam::cudaCoupledCsrMatrixExecutor::fillField
 
     cudaDeviceSynchronize();
     CHECK_LAST_CUDA_ERROR();
+
     err = CHECK_CUDA_ERROR(cudaFree(inPtr));
-    CHECK_LAST_CUDA_ERROR();
 }
-
-
 
 void Foam::cudaCoupledCsrMatrixExecutor::initializeAndApplyValue
 (
 	const label nBlocks,
     const label nCells,
     const label nIntFaces,
+	const label nnzExt,
     const label nOffsets,
     const label * const offsets,
     const label  * const ldu2csr,
     const scalar * const diag,
     const scalar * const upper,
     const scalar * const lower,
+    const scalar * const ext,
           scalar * values
 ) const
 {
@@ -240,6 +285,22 @@ void Foam::cudaCoupledCsrMatrixExecutor::initializeAndApplyValue
 	    	ldu2csr,
             upper,
             lower,
+            values
+        );
+    }
+    if (ext)
+    {
+        numBlocks = (nnzExt + NUM_THREADS_PER_BLOCK - 1) / NUM_THREADS_PER_BLOCK;
+        cudaInitializeValueExt<<<numBlocks, NUM_THREADS_PER_BLOCK>>>
+        (
+            nBlocks,
+            nCells,
+            nIntFaces,
+			nnzExt,
+	    	nOffsets,
+	    	offsets,
+	    	ldu2csr,
+			ext,
             values
         );
     }
@@ -330,4 +391,25 @@ void Foam::cudaCoupledCsrMatrixExecutor::initializeAndApplyValue
 
 makecudaCoupledCsrMatrixExecutor(Foam::scalar)
 makecudaCoupledCsrMatrixExecutor(Foam::vector)
+template void Foam::cudaCoupledCsrMatrixExecutor::concatenate<Foam::scalar>
+(
+    Foam::label globSize,
+    Foam::List<Foam::List<Foam::scalar>> lst,
+    Foam::scalar * ptr
+) const;
+
+template void Foam::cudaCoupledCsrMatrixExecutor::concatenate<Foam::vector>
+(
+    Foam::label globSize,
+    Foam::List<Foam::List<Foam::vector>> lst,
+    Foam::scalar * ptr
+) const;
+
+template void Foam::cudaCoupledCsrMatrixExecutor::concatenate<Foam::tensor>
+(
+    Foam::label globSize,
+    Foam::List<Foam::List<Foam::tensor>> lst,
+    Foam::scalar * ptr
+) const;
+
 // ************************************************************************* //

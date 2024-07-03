@@ -37,9 +37,7 @@ License
 
 Foam::coupledCsrMatrix::coupledCsrMatrix(word mode)
 :
-    csrMatrix(mode),
-	source_(nullptr),
-	variables_(nullptr)
+    csrMatrix(mode)
 {
     if (mode.starts_with("h"))
     {
@@ -62,51 +60,62 @@ Foam::coupledCsrMatrix::coupledCsrMatrix(word mode)
 // * * * * * * * * * * * * * * * * Operations * * * * * * * * * * * * * * * //
 
 //- Apply permutation to LDU values (no permutation)
-void Foam::coupledCsrMatrix::applyPermutation(const Foam::coupledMatrix& matrix)
+Foam::label Foam::coupledCsrMatrix::applyPermutation(const Foam::coupledMatrix& matrix)
 {
-    // Verify that the permutation has already been computed
-    if(!ldu2csrPerm_)
-    {
-        computePermutation(&(matrix.mesh().lduAddr()));
-    }
-
-
-    // 1) reorder dXbydY pointers according to row major order:
-    //         - effects on the first scalar
-    //         - effects on the second scalar
-    //         - effects on the n scalar
-    //         - effects on the first vector
-    //         - effects on the second vector
-    //         - effects on the n vector
-    // 2) Move every Ldu array on the device
-    // 3) Use single CUDA kernel to access coefficients in the order given by 1)
-    //    and reorder using ldu2Csr permutation while filling values array
-    // 4) Free Ldu arrays
-    // 5) solve using the new values array
-
-    int nScal = matrix.nScal();
-    int nVect = matrix.nVect();
-    int nCells = matrix.mesh().nCells();
-    int nIntFaces = matrix.mesh().nInternalFaces();
-    int totNnz = nCells + 2*nIntFaces;
+    label nScal = matrix.nScal();
+    label nVect = matrix.nVect();
 
     this->setNblocks(nScal+nVect*3);
-
-
-    if(!valuesPtr_)
+	label nnzExt = 0;
+    const lduInterfacePtrsList& interfaces = matrix.mesh().interfaces();
+    // Verify that the permutation has already been computed
+    if(!hasPermutation())
     {
-        std::visit([this, totNnz](const auto& exec)
-               { this->valuesPtr_ = exec.template allocZero<scalar>(totNnz*nBlocks_*nBlocks_); },
-               this->csrMatExec_);
+    	const lduAddressing& lduAddr = matrix.mesh().lduAddr();
+        computePermutation(lduAddr, interfaces, nnzExt);
+    }
+    else
+    {
+        forAll(interfaces, patchi)
+        {
+            if (interfaces.set(patchi))
+            {
+            	// Processor-local values
+                const labelUList& faceCells = matrix.mesh().lduAddr().patchAddr(patchi);
+                const label len = faceCells.size();
+                nnzExt += len;
+            }
+        }
     }
 
-    // Initialize valuesTmp = [(diag), (upper), (lower)] * nBlocks
-    // AoS order
-    //scalar* valuesTmp = nullptr;
-    //    std::visit([this, &valuesTmp, totNnz](const auto& exec)
-    //    		{ valuesTmp = exec.template alloc<scalar>(totNnz*nBlocks_*nBlocks_); },
-    //           this->csrMatExec_);
 
+    //nnzExt *= nBlocks_;
+    label nCells = matrix.mesh().nCells();
+    label nIntFaces = matrix.mesh().nInternalFaces();
+    label totNnz;
+
+    //- Compute global number of equations
+    label nGlobalCells = returnReduce(nCells, sumOp<label>());
+
+    if(consolidationStatus_ == ConsolidationStatus::initialized)
+    {
+        totNnz = nConsRows_ + 2*nConsIntFaces_ + nConsExtNz_;
+    }
+    else
+    {
+        totNnz = nCells + 2*nIntFaces + nnzExt;
+    }
+
+    if(gpuProc_)
+    {
+        if(!valuesPtr_)
+        {
+            std::visit([this, totNnz](const auto& exec)
+                   { this->valuesPtr_ = exec.template allocZero<scalar>(totNnz*nBlocks_*nBlocks_); },
+                   this->csrMatExec_);
+        }
+    }
+// Applying permutation block by block
 
     for(int ds=0; ds<nScal; ds++)
     {
@@ -114,37 +123,10 @@ void Foam::coupledCsrMatrix::applyPermutation(const Foam::coupledMatrix& matrix)
     	{
             if(matrix.dSBySExists(ds,bys))
     		{
+                const blockFvMatrix<scalar,scalar>& blockMat = matrix.dSByS(ds,bys);
                 labelList offsets(1);
                 offsets[0] = ds*nBlocks_ + bys;
-                const label* offPtr = nullptr;
-                std::visit([offsets, &offPtr](const auto& exec)
-                           { offPtr = exec.template copyFromFoam<label>(1, offsets.cdata()); },
-                           csrMatExec_);
-
-                const blockFvMatrix<scalar,scalar>& blockMat = matrix.dSByS(ds,bys);
-                const scalar* diagPtr = nullptr;
-                const scalar* upperPtr = nullptr;
-                const scalar* lowerPtr = nullptr;
-
-                this->copyLDUPtrs(blockMat,nCells,nIntFaces,&diagPtr,&upperPtr,&lowerPtr);
-
-                this->initializeAndApplyValue
-                (
-                	nBlocks_,
-                    nCells,
-                    nIntFaces,
-	            	1,
-	            	offPtr,
-                    ldu2csrPerm_,
-                    diagPtr,
-                    upperPtr,
-                    lowerPtr,
-                    valuesPtr_
-                );
-                std::visit([diagPtr, upperPtr, lowerPtr](const auto& exec)
-                           {exec.template clear<scalar>(diagPtr);
-                            exec.template clear<scalar>(upperPtr);
-                            exec.template clear<scalar>(lowerPtr);}, csrMatExec_);
+                blockApplyPermutation(matrix,blockMat,offsets,nCells,nIntFaces,nnzExt);
     		}
     	}
     	for(int byv=0; byv<nVect; byv++)
@@ -155,35 +137,8 @@ void Foam::coupledCsrMatrix::applyPermutation(const Foam::coupledMatrix& matrix)
                 offsets[0] = ds*nBlocks_ + nScal + 3*byv;
                 offsets[1] = ds*nBlocks_ + nScal + 3*byv + 1;
                 offsets[2] = ds*nBlocks_ + nScal + 3*byv + 2;
-                const label* offPtr = nullptr;
-                std::visit([offsets, &offPtr](const auto& exec)
-                           { offPtr = exec.template copyFromFoam<label>(3, offsets.cdata()); },
-                           csrMatExec_);
-
                 const blockFvMatrix<scalar,vector>& blockMat = matrix.dSByV(ds,byv);
-                const scalar* diagPtr = nullptr;
-                const scalar* upperPtr = nullptr;
-                const scalar* lowerPtr = nullptr;
-
-                this->copyLDUPtrs(blockMat,3*nCells,3*nIntFaces,&diagPtr,&upperPtr,&lowerPtr);
-
-                this->initializeAndApplyValue
-                (
-                	nBlocks_,
-                    nCells,
-                    nIntFaces,
-	            	3,
-	            	offPtr,
-                    ldu2csrPerm_,
-                    diagPtr,
-                    upperPtr,
-                    lowerPtr,
-                    valuesPtr_
-                );
-                std::visit([diagPtr, upperPtr, lowerPtr](const auto& exec)
-                           {exec.template clear<scalar>(diagPtr);
-                            exec.template clear<scalar>(upperPtr);
-                            exec.template clear<scalar>(lowerPtr);}, csrMatExec_);
+                blockApplyPermutation(matrix,blockMat,offsets,nCells,nIntFaces,nnzExt);
     		}
     	}
     }
@@ -198,35 +153,8 @@ void Foam::coupledCsrMatrix::applyPermutation(const Foam::coupledMatrix& matrix)
                 offsets[0] = (nScal+3*dv)*nBlocks_ + bys;
                 offsets[1] = (nScal+3*dv)*nBlocks_ + bys + nBlocks_;
                 offsets[2] = (nScal+3*dv)*nBlocks_ + bys + 2*nBlocks_;
-                const label* offPtr = nullptr;
-                std::visit([offsets, &offPtr](const auto& exec)
-                           { offPtr = exec.template copyFromFoam<label>(3, offsets.cdata()); },
-                           csrMatExec_);
-
                 const blockFvMatrix<vector,vector>& blockMat = matrix.dVByS(dv,bys);
-                const scalar* diagPtr = nullptr;
-                const scalar* upperPtr = nullptr;
-                const scalar* lowerPtr = nullptr;
-
-                this->copyLDUPtrs(blockMat,3*nCells,3*nIntFaces,&diagPtr,&upperPtr,&lowerPtr);
-
-                this->initializeAndApplyValue
-                (
-                	nBlocks_,
-                    nCells,
-                    nIntFaces,
-	            	3,
-	            	offPtr,
-                    ldu2csrPerm_,
-                    diagPtr,
-                    upperPtr,
-                    lowerPtr,
-                    valuesPtr_
-                );
-                std::visit([diagPtr, upperPtr, lowerPtr](const auto& exec)
-                           {exec.template clear<scalar>(diagPtr);
-                            exec.template clear<scalar>(upperPtr);
-                            exec.template clear<scalar>(lowerPtr);}, csrMatExec_);
+                blockApplyPermutation(matrix,blockMat,offsets,nCells,nIntFaces,nnzExt);
     		}
     	}
     	for(int byv=0; byv<nVect; byv++)
@@ -243,82 +171,261 @@ void Foam::coupledCsrMatrix::applyPermutation(const Foam::coupledMatrix& matrix)
                 offsets[6] = (nScal+3*dv)*nBlocks_ + nScal + 3*byv + 2*nBlocks_;
                 offsets[7] = (nScal+3*dv)*nBlocks_ + nScal + 3*byv + 2*nBlocks_ + 1;
                 offsets[8] = (nScal+3*dv)*nBlocks_ + nScal + 3*byv + 2*nBlocks_ + 2;
-                const label* offPtr = nullptr;
-                std::visit([offsets, &offPtr](const auto& exec)
-                           { offPtr = exec.template copyFromFoam<label>(9, offsets.cdata()); },
-                           csrMatExec_);
-
                 const blockFvMatrix<vector,tensor>& blockMat = matrix.dVByV(dv,byv);
-                const scalar* diagPtr = nullptr;
-                const scalar* upperPtr = nullptr;
-                const scalar* lowerPtr = nullptr;
-
-                this->copyLDUPtrs(blockMat,9*nCells,9*nIntFaces,&diagPtr,&upperPtr,&lowerPtr);
-
-                this->initializeAndApplyValue
-                (
-                	nBlocks_,
-                    nCells,
-                    nIntFaces,
-	            	9,
-	            	offPtr,
-                    ldu2csrPerm_,
-                    diagPtr,
-                    upperPtr,
-                    lowerPtr,
-                    valuesPtr_
-                );
-                std::visit([diagPtr, upperPtr, lowerPtr](const auto& exec)
-                           {exec.template clear<scalar>(diagPtr);
-                            exec.template clear<scalar>(upperPtr);
-                            exec.template clear<scalar>(lowerPtr);}, csrMatExec_);
+                blockApplyPermutation(matrix,blockMat,offsets,nCells,nIntFaces,nnzExt);
     		}
     	}
     }
+
+    return nGlobalCells;
+}
+
+template<class sourceType, class blockType>
+void Foam::coupledCsrMatrix::blockApplyPermutation
+(
+	const coupledMatrix& cpldMatrix,
+    const blockFvMatrix<sourceType,blockType>& matrix,
+	const labelList offsets,
+	const label cells,
+	const label intFaces,
+	const label nnzExt
+)
+{
+    const label* offPtr = nullptr;
+    const label offSize = offsets.size();
+    std::visit([offsets, &offPtr](const auto& exec)
+               { offPtr = exec.template copyFromFoam<label>(offsets.size(), offsets.cdata()); },
+               csrMatExec_);
+
+    scalar* diagPtr = nullptr;
+    scalar* upperPtr = nullptr;
+    scalar* lowerPtr = nullptr;
+    scalar* extPtr = nullptr;
+
+    if(consolidationStatus_ == ConsolidationStatus::initialized)
+    {
+        blkConsInit
+ 	    (
+ 	       cpldMatrix,
+           matrix,
+ 	 	   cells,
+ 	 	   intFaces,
+ 	 	   nnzExt,
+ 	 	   offSize,
+ 	 	   &diagPtr,
+ 	 	   &upperPtr,
+ 	 	   &lowerPtr,
+ 	 	   &extPtr
+ 	    );
+    }
+    else
+    {
+        copyLDUPtrs
+ 	    (
+ 	       cpldMatrix,
+           matrix,
+ 	 	   cells,
+ 	 	   intFaces,
+ 	 	   nnzExt,
+ 	 	   offSize,
+ 	 	   &diagPtr,
+ 	 	   &upperPtr,
+ 	 	   &lowerPtr,
+ 	 	   &extPtr
+ 	    );
+    }
+    if(gpuProc_)
+    {
+        this->initializeAndApplyValue
+        (
+            nBlocks_,
+            nConsRows_,
+            nConsIntFaces_,
+			nConsExtNz_,
+        	offSize,
+        	offPtr,
+            ldu2csrPerm_,
+            diagPtr,
+            upperPtr,
+            lowerPtr,
+			extPtr,
+            valuesPtr_
+        );
+    }
+    std::visit([diagPtr, upperPtr, lowerPtr, offPtr, extPtr](const auto& exec)
+               {exec.template clear<scalar>(diagPtr);
+                exec.template clear<scalar>(upperPtr);
+                exec.template clear<scalar>(lowerPtr);
+                exec.template clear<label>(offPtr);
+                exec.template clear<scalar>(extPtr);}, csrMatExec_);
+
 }
 
 template<class sourceType, class blockType>
 void Foam::coupledCsrMatrix::copyLDUPtrs
 (
+	const coupledMatrix& cpldMatrix,
     const blockFvMatrix<sourceType,blockType>& matrix,
 	const label nCells,
 	const label nIntFaces,
-    const scalar** diagPtr,
-    const scalar** upperPtr,
-    const scalar** lowerPtr
+	const label nnzExt,
+	const label offSize,
+    scalar** diagPtr,
+    scalar** upperPtr,
+    scalar** lowerPtr,
+    scalar** extPtr
 )
 {
+    Field<blockType> foamExtVals(nnzExt,Foam::Zero);
+    label localNnz = 0;
+    forAll(cpldMatrix.mesh().boundary(), patchi)
+    {
+		if (cpldMatrix.mesh().boundary()[patchi].coupled() && matrix.interfacesUpper().set(patchi))
+		{
+            //- Processor-local values
+            const Field<blockType>& bCoeffs = matrix.interfacesUpper()[patchi];
+            const label len = bCoeffs.size();
 
-    std::visit([matrix, nCells, nIntFaces, &diagPtr, &upperPtr, &lowerPtr](const auto& exec)
+            SubList<blockType>(foamExtVals, len, localNnz) = bCoeffs;
+            localNnz += len;
+        }
+    }
+    if (localNnz != nnzExt && !matrix.diagonal())
+    {
+    	Info << "Warning: dimension mismatch in interface consolidation" << endl;
+    }
+
+    std::visit([matrix, foamExtVals, offSize, nCells, nIntFaces, nnzExt, &diagPtr, &upperPtr, &lowerPtr, &extPtr]
+			   (const auto& exec)
                {
     	           if (matrix.hasDiag())
     	           {
-    	               *(diagPtr) = exec.template copyFromFoam<scalar>
+    	               *(diagPtr) = const_cast<scalar*>(exec.template copyFromFoam<scalar>
                        (
-                           nCells,
+                           offSize*nCells,
 				    	   reinterpret_cast<const scalar*>(matrix.diag().cdata())
-				       );
+				       ));
     	           }
-
     	           if (matrix.hasUpper())
     	           {
-    	               *(upperPtr) = exec.template copyFromFoam<scalar>
+    	               *(upperPtr) = const_cast<scalar*>(exec.template copyFromFoam<scalar>
                        (
-                           nIntFaces,
+                           offSize*nIntFaces,
 				    	   reinterpret_cast<const scalar*>(matrix.upper().cdata())
-				       );
+				       ));
     	           }
     	           if (matrix.hasLower())
     	           {
-    	               *(lowerPtr) = exec.template copyFromFoam<scalar>
+    	               *(lowerPtr) = const_cast<scalar*>(exec.template copyFromFoam<scalar>
                        (
-                           nIntFaces,
+                           offSize*nIntFaces,
 				    	   reinterpret_cast<const scalar*>(matrix.lower().cdata())
-				       );
+				       ));
+    	           }
+    	           if (foamExtVals.size() > 0)
+    	           {
+    	               *(extPtr) = const_cast<scalar*>(exec.template copyFromFoam<scalar>
+                       (
+                           offSize*nnzExt,
+				    	   reinterpret_cast<const scalar*>(foamExtVals.cdata())
+				       ));
     	           }
                }, csrMatExec_);
 }
 
+template<class sourceType, class blockType>
+void Foam::coupledCsrMatrix::blkConsInit
+(
+	const coupledMatrix& cpldMatrix,
+    const blockFvMatrix<sourceType,blockType>& matrix,
+	const label nCells,
+	const label nIntFaces,
+	const label nnzExt,
+	const label offSize,
+    scalar** diagPtr,
+    scalar** upperPtr,
+    scalar** lowerPtr,
+    scalar** extPtr
+)
+{
+    const label nC = pTraits<blockType>::nComponents;
+    List<List<blockType>> diagLst(gpuWorldSize_);
+    if (matrix.hasDiag())
+    {
+        diagLst[myGpuWorldRank_] = matrix.diag();
+    }
+    Pstream::gatherList(diagLst, UPstream::msgType(), gpuWorld_);
+
+    List<List<blockType>> upperLst(gpuWorldSize_);
+    if (matrix.hasUpper())
+    {
+        upperLst[myGpuWorldRank_] = matrix.upper();
+    }
+    Pstream::gatherList(upperLst, UPstream::msgType(), gpuWorld_);
+
+    List<List<blockType>> lowerLst(gpuWorldSize_);
+    if (matrix.hasLower())
+    {
+        lowerLst[myGpuWorldRank_] = matrix.lower();
+    }
+    Pstream::gatherList(lowerLst, UPstream::msgType(), gpuWorld_);
+
+    Field<blockType> foamExtVals(nnzExt,Foam::Zero);
+    List<List<blockType>> extValLst(gpuWorldSize_);
+    label localNnz = 0;
+    forAll(cpldMatrix.mesh().boundary(), patchi)
+    {
+	   if (cpldMatrix.mesh().boundary()[patchi].coupled() && matrix.interfacesUpper().set(patchi))
+	   {
+           //- Processor-local values
+           const Field<blockType>& bCoeffs = matrix.interfacesUpper()[patchi];
+           const label len = bCoeffs.size();
+
+           SubList<blockType>(foamExtVals, len, localNnz) = bCoeffs;
+           localNnz += len;
+        }
+    }
+    if (localNnz != nnzExt && !matrix.diagonal())
+    {
+    	Info << "Warning: dimension mismatch in interface consolidation" << endl;
+    }
+    extValLst[myGpuWorldRank_] = foamExtVals;
+    Pstream::gatherList(extValLst, UPstream::msgType(), gpuWorld_);
+
+    if(gpuProc_)
+    {
+        std::visit([this, &diagPtr](const auto& exec)
+                    { *(diagPtr) = exec.template alloc<scalar>(nC*this->nConsRows_); },
+                    csrMatExec_);
+        std::visit([this, &diagLst, &diagPtr](const auto& exec)
+                    { exec.template concatenate<blockType>(this->nConsRows_, diagLst, *(diagPtr)); },
+                    coupledCsrMatExec_);
+
+        std::visit([this, &upperPtr](const auto& exec)
+                    { *(upperPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_); },
+                    csrMatExec_);
+        std::visit([this, &upperLst, &upperPtr](const auto& exec)
+                    { exec.template concatenate<blockType>(this->nConsIntFaces_, upperLst, *(upperPtr)); },
+                    coupledCsrMatExec_);
+
+        std::visit([this, &lowerPtr](const auto& exec)
+                    { *(lowerPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_); },
+                    csrMatExec_);
+        std::visit([this, &lowerLst, &lowerPtr](const auto& exec)
+                    { exec.template concatenate<blockType>(this->nConsIntFaces_, lowerLst, *(lowerPtr)); },
+                    coupledCsrMatExec_);
+
+        std::visit([this, &extPtr](const auto& exec)
+                    { *(extPtr) = exec.template alloc<scalar>(nC*this->nConsExtNz_); },
+                    csrMatExec_);
+        std::visit([this, &extValLst, &extPtr](const auto& exec)
+                    { exec.template concatenate<blockType>(this->nConsExtNz_, extValLst, *(extPtr)); },
+                    coupledCsrMatExec_);
+    }
+
+
+    Pstream::barrier(gpuWorld_);
+}
 
 void Foam::coupledCsrMatrix::fillSource
 (
@@ -327,9 +434,21 @@ void Foam::coupledCsrMatrix::fillSource
 	const PtrList<vectorField>& vSource
 )
 {
-    const label nCells = matrix.mesh().nCells();
     const label nScalar = matrix.nScal();
     const label nVector = matrix.nVect();
+    const label nCells = matrix.mesh().nCells();
+    //scalar* sourcePtr = nullptr;
+    label consDispl = 0;
+    if(isConsolidated())
+    {
+        consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+    }
+    else
+    {
+        std::visit([this,nCells](const auto& exec)
+               { this->rhsCons_ = exec.template allocZero<scalar>(nBlocks_*nCells); },
+               this->csrMatExec_);
+    }
 
     forN(nScalar,j)
     {
@@ -338,7 +457,7 @@ void Foam::coupledCsrMatrix::fillSource
             nCells,
 			j,
 			sSource[j],
-			source_
+			&rhsCons_[consDispl*nBlocks_]
     	);
     }
 
@@ -349,7 +468,7 @@ void Foam::coupledCsrMatrix::fillSource
             nCells,
 			nScalar + 3*j,
 			vSource[j],
-			source_
+			&rhsCons_[consDispl*nBlocks_]
     	);
     }
 }
@@ -365,6 +484,21 @@ void Foam::coupledCsrMatrix::fillVariables
     const label nScalar = matrix.nScal();
     const label nVector = matrix.nVect();
 
+    //scalar* varPtr = nullptr;
+    label consDispl = 0;
+    if(isConsolidated())
+    {
+        consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+        //varPtr = &psiCons_[consDispl*nBlocks_];
+    }
+    else
+    {
+        std::visit([this, nCells](const auto& exec)
+               { this->psiCons_ = exec.template allocZero<scalar>(nBlocks_*nCells); },
+               this->csrMatExec_);
+    //	varPtr = psiCons_;
+    }
+
     forN(nScalar,j)
     {
     	fillField<scalar>
@@ -372,7 +506,7 @@ void Foam::coupledCsrMatrix::fillVariables
             nCells,
 			j,
 			sVolField[j].primitiveField(),
-			variables_
+			&psiCons_[consDispl*nBlocks_]
     	);
     }
     forN(nVector,j)
@@ -382,7 +516,7 @@ void Foam::coupledCsrMatrix::fillVariables
             nCells,
 			nScalar + 3*j,
 			vVolField[j].primitiveField(),
-			variables_
+			&psiCons_[consDispl*nBlocks_]
     	);
     }
 }
@@ -398,26 +532,37 @@ void Foam::coupledCsrMatrix::transferVariables
     const label nScalar = matrix.nScal();
     const label nVector = matrix.nVect();
 
-    scalar* hostPtr = new scalar[nCells*nBlocks_];
+    scalarField hostFld(nCells*nBlocks_);
+    scalar* hostPtr = hostFld.data();
+    scalar* devPtr = nullptr;
+    if(isConsolidated())
+    {
+        label consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+        devPtr = &psiCons_[consDispl*nBlocks_];
+    }
+    else
+    {
+    	devPtr = psiCons_;
+    }
 
-    std::visit([this, &hostPtr, nCells](const auto& exec)
-               { exec.template copyToFoam<scalar>(nCells*this->nBlocks_, this->variables_, &hostPtr);},
+    std::visit([this, &hostPtr, &devPtr, nCells](const auto& exec)
+               { exec.template copyToFoam<scalar>(nCells*this->nBlocks_, devPtr, &hostPtr);},
                csrMatExec_);
 
     forN(nScalar,j)
     {
         for(label i=0; i<nCells;i++)
         {
-            sVolField[j].primitiveFieldRef()[i] = hostPtr[i*nBlocks_ + j];
+            sVolField[j].primitiveFieldRef()[i] = hostFld[i*nBlocks_ + j];
         }
     }
     forN(nVector,j)
     {
         for(label i=0; i<nCells;i++)
         {
-            vVolField[j].primitiveFieldRef()[i].x() = hostPtr[i*nBlocks_ + nScalar + 3*j];
-            vVolField[j].primitiveFieldRef()[i].y() = hostPtr[i*nBlocks_ + nScalar + 3*j + 1];
-            vVolField[j].primitiveFieldRef()[i].z() = hostPtr[i*nBlocks_ + nScalar + 3*j + 2];
+            vVolField[j].primitiveFieldRef()[i].x() = hostFld[i*nBlocks_ + nScalar + 3*j];
+            vVolField[j].primitiveFieldRef()[i].y() = hostFld[i*nBlocks_ + nScalar + 3*j + 1];
+            vVolField[j].primitiveFieldRef()[i].z() = hostFld[i*nBlocks_ + nScalar + 3*j + 2];
         }
     }
 }

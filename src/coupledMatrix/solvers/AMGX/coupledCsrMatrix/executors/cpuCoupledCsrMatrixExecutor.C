@@ -40,12 +40,14 @@ void Foam::cpuCoupledCsrMatrixExecutor::initializeAndApplyValue
     const label nBlocks,
     const label nCells,
     const label nIntFaces,
+	const label nnzExt,
     const label nOffsets,
     const label * const offsets,
     const label  * const ldu2csr,
     const scalar * const diag,
     const scalar * const upper,
     const scalar * const lower,
+    const scalar * const ext,
           scalar * values
 ) const
 {
@@ -73,6 +75,43 @@ void Foam::cpuCoupledCsrMatrixExecutor::fillField
 {
     const label nComps = pTraits<Type>::nComponents;
 
+}
+
+template<class Type>
+void Foam::cpuCoupledCsrMatrixExecutor::concatenate
+(
+    label globSize,
+    List<List<Type>> lst,
+    scalar * ptr
+) const
+{
+	NotImplemented;
+    //label newStart = 0;
+    //label size;
+    //const label nC = pTraits<Type>::nComponents;
+
+    //for(label i=0; i<lst.size(); ++i)
+    //{
+    //    size = lst[i].size();
+    //    label err = CHECK_CUDA_ERROR(
+    //                    cudaMemcpy
+	//					(
+    //                        &ptr[newStart],
+	//						reinterpret_cast<const scalar*>(lst[i].cdata()),
+	//						(size_t) size*sizeof(scalar)*nC,
+	//						cudaMemcpyHostToDevice
+	//					)
+    //                );
+    //    if (err != 0)
+    //    {
+    //        FatalErrorInFunction << "ERROR: cudaMemcpy returned " << err << abort(FatalError);
+    //    }
+    //    newStart += size;
+    //    if(newStart > globSize)
+    //    {
+    //        FatalErrorInFunction << "Concatenate size mismatch" << nl;
+    //    }
+    //}
 }
 
 //void Foam::cpuCoupledCsrMatrixExecutor::initializeValueExt
@@ -139,3 +178,23 @@ void Foam::cpuCoupledCsrMatrixExecutor::fillField
 
 makecpuCoupledCsrMatrixExecutor(Foam::scalar)
 makecpuCoupledCsrMatrixExecutor(Foam::vector)
+template void Foam::cpuCoupledCsrMatrixExecutor::concatenate<Foam::scalar>
+(
+    Foam::label globSize,
+    Foam::List<Foam::List<Foam::scalar>> lst,
+    Foam::scalar * ptr
+) const;
+
+template void Foam::cpuCoupledCsrMatrixExecutor::concatenate<Foam::vector>
+(
+    Foam::label globSize,
+    Foam::List<Foam::List<Foam::vector>> lst,
+    Foam::scalar * ptr
+) const;
+
+template void Foam::cpuCoupledCsrMatrixExecutor::concatenate<Foam::tensor>
+(
+    Foam::label globSize,
+    Foam::List<Foam::List<Foam::tensor>> lst,
+    Foam::scalar * ptr
+) const;

@@ -66,8 +66,6 @@ class coupledCsrMatrix
 {
     // Private Data
 
-        scalar * source_;
-        scalar * variables_;
         //- Data executor
         coupledCsrMatrixExecutor coupledCsrMatExec_;
 
@@ -117,20 +115,51 @@ public:
     //- Member Functions
 
             //- Apply permutation from LDU to CSR
-            void applyPermutation(const coupledMatrix& matrix);
+            label applyPermutation(const coupledMatrix& matrix);
+
+            //- Block apply permutation (helper function)
+            template<class sourceType, class blockType>
+            void blockApplyPermutation
+			(
+             	const coupledMatrix& cpldMatrix,
+				const blockFvMatrix<sourceType,blockType>& matrix,
+			    const labelList offsets,
+				const label cells,
+				const label intFaces,
+				const label nnzExt
+			);
 
             //- Helper function that copies LDU pointers
             template<class sourceType, class blockType>
             void copyLDUPtrs
 			(
+             	const coupledMatrix& cpldMatrix,
 				const blockFvMatrix<sourceType,blockType>& matrix,
 			    const label nCells,
 				const label nIntFaces,
-                const scalar** diagPtr,
-                const scalar** upperPtr,
-                const scalar** lowerPtr
+				const label nnzExt,
+				const label offSize,
+                scalar** diagPtr,
+                scalar** upperPtr,
+                scalar** lowerPtr,
+                scalar** extPtr
 			);
 
+            //- Helper function that copies LDU pointers
+            template<class sourceType, class blockType>
+            void blkConsInit
+			(
+             	const coupledMatrix& cpldMatrix,
+				const blockFvMatrix<sourceType,blockType>& matrix,
+			    const label nCells,
+				const label nIntFaces,
+				const label nnzExt,
+				const label offSize,
+                scalar** diagPtr,
+                scalar** upperPtr,
+                scalar** lowerPtr,
+                scalar** extPtr
+			);
 
             //- Fills source array with re-ordered values (block AoS)
             void fillSource
@@ -161,12 +190,14 @@ public:
             	const label nBlocks,
                 const label nCells,
                 const label nIntFaces,
+				const label nnzExt,
                 const label nOffsets,
                 const label * const offsets,
                 const label  * const ldu2csr,
                 const scalar * const diag,
                 const scalar * const upper,
                 const scalar * const lower,
+                const scalar * const ext,
                       scalar * values
             );
 
@@ -199,36 +230,36 @@ public:
 
             scalar* source()
             {
-            	return source_;
+            	return rhsCons_;
             };
 
             void allocSource(const coupledMatrix& matrix)
             {
                 std::visit([this, matrix](const auto& exec)
-                           { this->source_ = exec.template alloc<scalar>(matrix.mesh().nCells()*nBlocks_); },
+                           { this->rhsCons_ = exec.template alloc<scalar>(matrix.mesh().nCells()*nBlocks_); },
                            csrMatExec_);
             }
             void clearSource()
             {
                 std::visit([this](const auto& exec)
-                       {exec.template clear<scalar>(this->source_); }, csrMatExec_);
+                       {exec.template clear<scalar>(this->rhsCons_); }, csrMatExec_);
             }
 
             scalar* variables()
             {
-            	return variables_;
+            	return psiCons_;
             };
 
             void allocVariables(const coupledMatrix& matrix)
             {
                 std::visit([this, matrix](const auto& exec)
-                           { this->variables_ = exec.template alloc<scalar>(matrix.mesh().nCells()*nBlocks_); },
+                           { this->psiCons_ = exec.template alloc<scalar>(matrix.mesh().nCells()*nBlocks_); },
                            csrMatExec_);
             }
             void clearVariables()
             {
                 std::visit([this](const auto& exec)
-                       {exec.template clear<scalar>(this->variables_); }, csrMatExec_);
+                       {exec.template clear<scalar>(this->psiCons_); }, csrMatExec_);
             }
 };
 

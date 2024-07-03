@@ -63,12 +63,14 @@ public:
     	const label nBlocks,
         const label nCells,
         const label nIntFaces,
+		const label nnzExt,
         const label nOffsets,
         const label * const offsets,
         const label  * const ldu2csr,
         const scalar * const diag,
         const scalar * const upper,
         const scalar * const lower,
+        const scalar * const ext,
               scalar * values
     ) const;
 
@@ -83,6 +85,13 @@ public:
 		      scalar * output
 	) const;
 
+    template<class Type>
+    void concatenate
+    (
+        label globSize,
+        List<List<Type>> lst,
+        scalar * ptr
+    ) const;
     //void initializeValueExt
     //(
     //    const label    nCells,
