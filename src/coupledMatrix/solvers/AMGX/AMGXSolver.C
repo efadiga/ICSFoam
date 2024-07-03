@@ -494,10 +494,6 @@ residualsIO AMGXSolver::solveDelta
         solverPerf.vFinalRes()[i] = solverPerf.vInitRes()[i];
     }
 
-    //// Approximate initial residual
-    //forN(nScalar,i) sTmp[i] = sSource[i];
-    //forN(nVector,i) vTmp[i] = vSource[i];
-
 
     /// AMGX SOLUTION START ///
 
@@ -522,11 +518,13 @@ residualsIO AMGXSolver::solveDelta
 
     label nGlobalCells;
 
-    if(!Pstream::parRun())
+    if(!ctx.initialized())
     {
-        nGlobalCells = nCells;
-        Amat.applyPermutation(this->matrix_);
+        if(Pstream::parRun()) amgx.initialiseMatrixComms(&Amat);
+        else Amat.setGpuProc(true);
     }
+    nGlobalCells = Amat.applyPermutation(this->matrix_);
+    //}
     /*else
     {
         if(!Amat.hasPermutation()) buildAndApplyMatrixPermutation(&Amat, nGlobalCells);
@@ -539,9 +537,10 @@ residualsIO AMGXSolver::solveDelta
 
         amgx.setOperator(nGlobalCells, &Amat);
 
-        // Amat.clearAddressing();
+        Amat.clearAddressing();
 
         ctx.initialized() = true;
+        amgx.updateOperator(&Amat);
     }
     else
     {
@@ -549,17 +548,19 @@ residualsIO AMGXSolver::solveDelta
     }
 
     Info << "Allocating source and variables on the device" << endl;
-    Amat.allocSource(this->matrix());
-    Amat.allocVariables(this->matrix());
+    //Amat.allocSource(this->matrix());
+    //Amat.allocVariables(this->matrix());
 
     Amat.fillSource(this->matrix(),sSource,vSource);
     Amat.fillVariables(this->matrix(),dsW,dvW);
 
-    amgx.solve(nCells, Amat.variables(), Amat.source(), &Amat);
+    Info << "Solving " << endl;
+    amgx.solve(&Amat);
 
-    Amat.clearSource();
+    //Amat.clearSource();
+
     Amat.transferVariables(this->matrix(),dsW,dvW);
-    Amat.clearVariables();
+    //Amat.clearVariables();
 
     scalarField iNorm(nScalar+3*nVector, 0.0);
     amgx.getResidual(0, iNorm, Amat.nBlocks());
