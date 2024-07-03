@@ -1,0 +1,17 @@
+#------------------------------------------------------------------------------
+# Additional rules for handling c++ files
+
+ifeq (,$(strip $(NVARCH)))
+    NVARCH := 80
+endif
+
+c++FLAGS += -std=c++17 -O3
+
+ifneq (,$(findstring true,$(have_cuda)))
+    c++FLAGS += -Dhave_cuda
+    CC += -gpu=cc$(NVARCH) -cuda
+    LINKEXE += -lcudart -lcusparse
+    include $(WMAKE_LOCAL)/cuda
+
+endif
+#------------------------------------------------------------------------------

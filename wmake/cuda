@@ -1,0 +1,44 @@
+#------------------------------------------------------------------------------
+# Additional rules for handling CUDA files
+
+SUFFIXES   += .cu
+
+ifeq (,$(strip $(NVARCH)))
+    NVARCH := 80
+endif
+
+NVCC      := nvcc$(COMPILER_VERSION) -std=c++17 --compiler-options '-fPIC'
+
+cuARCH    :=  -m64 -arch=sm_$(NVARCH)
+cuDBUG    :=
+cuOPT     := -O2
+ptFLAGS   := -DNoRepository
+
+cuWARN     = --compiler-options '-Wall -Wextra -Wno-unused' \
+                -Xcudafe '--diag_suppress=177 \
+                          --diag_suppress=611 \
+                          --diag_suppress=997'
+
+# Tuning
+sinclude $(WMAKE_LOCAL)/common/cuda$(WM_COMPILE_OPTION)
+
+CU_LIB_HEADER_DIRS = \
+     $(EXE_INC) \
+     -IlnInclude \
+     --compiler-options '-iquote.' \
+     $(PROJECT_INC) \
+     $(GINC) \
+     $(SYS_INC)
+
+cuFLAGS    = \
+    $(cuARCH) $(GFLAGS) $(cuWARN) $(cuOPT) $(cuDBUG) -Dhave_cuda $(ptFLAGS) \
+    $(FOAM_EXTRA_CXXFLAGS) $(CU_LIB_HEADER_DIRS)
+
+cutoo       = $(WM_SCHEDULER) $(NVCC) $(cuFLAGS) -c $< -o $@
+
+$(OBJECTS_DIR)/%.o : %.cu
+	$(cutoo)
+
+#include $(WMAKE_LOCAL)/link-cuda
+
+#------------------------------------------------------------------------------
