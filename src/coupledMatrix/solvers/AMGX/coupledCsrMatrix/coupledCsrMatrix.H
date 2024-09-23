@@ -41,7 +41,7 @@ SourceFiles
 #define Foam_coupledCsrMatrix_H
 
 #include "Enum.H"
-#include "scalar.H"
+//#include "scalar.H"
 #include "coupledMatrix.H"
 #include "coupledCsrMatrixExecutor.H"
 #include "blockFvMatrix.H"

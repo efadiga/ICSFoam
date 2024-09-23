@@ -247,20 +247,20 @@ void Foam::coupledCsrMatrix::blockApplyPermutation
         	offSize,
         	offPtr,
             ldu2csrPerm_,
-            diagPtr,
-            upperPtr,
-            lowerPtr,
-			extPtr,
+            (scalar *) diagPtr,
+            (scalar *) upperPtr,
+            (scalar *) lowerPtr,
+			(scalar *) extPtr,
             valuesPtr_
         );
-    }
-    std::visit([diagPtr, upperPtr, lowerPtr, offPtr, extPtr](const auto& exec)
-               {exec.template clear<scalar>(diagPtr);
-                exec.template clear<scalar>(upperPtr);
-                exec.template clear<scalar>(lowerPtr);
-                exec.template clear<label>(offPtr);
-                exec.template clear<scalar>(extPtr);}, csrMatExec_);
 
+        std::visit([diagPtr, upperPtr, lowerPtr, offPtr, extPtr](const auto& exec)
+                   {exec.template clear<scalar>(diagPtr);
+                    exec.template clear<scalar>(upperPtr);
+                    exec.template clear<scalar>(lowerPtr);
+                    exec.template clear<label>(offPtr);
+                    exec.template clear<scalar>(extPtr);}, csrMatExec_);
+    }
 }
 
 template<class sourceType, class blockType>
@@ -350,30 +350,68 @@ void Foam::coupledCsrMatrix::blkConsInit
     scalar** extPtr
 )
 {
+
     const label nC = pTraits<blockType>::nComponents;
-    List<List<blockType>> diagLst(gpuWorldSize_);
-    if (matrix.hasDiag())
+    cudaIpcMemHandle_t diagConsHandle;
+    cudaIpcMemHandle_t upperConsHandle;
+    cudaIpcMemHandle_t lowerConsHandle;
+    cudaIpcMemHandle_t extConsHandle;
+    if(gpuProc_)
     {
-        diagLst[myGpuWorldRank_] = matrix.diag();
-    }
-    Pstream::gatherList(diagLst, UPstream::msgType(), gpuWorld_);
+        std::visit([this, matrix, &diagPtr, &upperPtr, &lowerPtr, &extPtr, nnzExt](const auto& exec)
+        {
+            if (matrix.hasDiag())
+            {
+                *(diagPtr) = exec.template alloc<scalar>(nC*this->nConsRows_);
+            }
+            if (matrix.hasUpper())
+            {
+                *(upperPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_);
+            }
+            if (matrix.hasLower())
+            {
+                *(lowerPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_);
+            }
+            if (nnzExt > 0)
+            {
+                *(extPtr) = exec.template alloc<scalar>(nC*this->nConsExtNz_);
+            }
+        }, this->csrMatExec_);
 
-    List<List<blockType>> upperLst(gpuWorldSize_);
-    if (matrix.hasUpper())
-    {
-        upperLst[myGpuWorldRank_] = matrix.upper();
+        if (matrix.hasDiag()) cudaIpcGetMemHandle(&diagConsHandle, *diagPtr);
+        if (matrix.hasUpper()) cudaIpcGetMemHandle(&upperConsHandle, *upperPtr);
+        if (matrix.hasLower()) cudaIpcGetMemHandle(&lowerConsHandle, *lowerPtr);
+        if (nnzExt > 0) cudaIpcGetMemHandle(&extConsHandle, *extPtr);
     }
-    Pstream::gatherList(upperLst, UPstream::msgType(), gpuWorld_);
 
-    List<List<blockType>> lowerLst(gpuWorldSize_);
-    if (matrix.hasLower())
-    {
-        lowerLst[myGpuWorldRank_] = matrix.lower();
-    }
-    Pstream::gatherList(lowerLst, UPstream::msgType(), gpuWorld_);
+    if (matrix.hasDiag()) Pstream::broadcast((char*) &diagConsHandle, sizeof(cudaIpcMemHandle_t), gpuWorld_, Pstream::masterNo());
+    if (matrix.hasUpper()) Pstream::broadcast((char*) &upperConsHandle, sizeof(cudaIpcMemHandle_t), gpuWorld_, Pstream::masterNo());
+    if (matrix.hasLower()) Pstream::broadcast((char*) &lowerConsHandle, sizeof(cudaIpcMemHandle_t), gpuWorld_, Pstream::masterNo());
+    if (nnzExt > 0) Pstream::broadcast((char*) &extConsHandle, sizeof(cudaIpcMemHandle_t), gpuWorld_, Pstream::masterNo());
+
+//    List<List<blockType>> diagLst(gpuWorldSize_);
+//    if (matrix.hasDiag())
+//    {
+//        diagLst[myGpuWorldRank_] = matrix.diag();
+//    }
+//    Pstream::gatherList(diagLst, UPstream::msgType(), gpuWorld_);
+//
+//    List<List<blockType>> upperLst(gpuWorldSize_);
+//    if (matrix.hasUpper())
+//    {
+//        upperLst[myGpuWorldRank_] = matrix.upper();
+//    }
+//    Pstream::gatherList(upperLst, UPstream::msgType(), gpuWorld_);
+//
+//    List<List<blockType>> lowerLst(gpuWorldSize_);
+//    if (matrix.hasLower())
+//    {
+//        lowerLst[myGpuWorldRank_] = matrix.lower();
+//    }
+//    Pstream::gatherList(lowerLst, UPstream::msgType(), gpuWorld_);
 
     Field<blockType> foamExtVals(nnzExt,Foam::Zero);
-    List<List<blockType>> extValLst(gpuWorldSize_);
+   // List<List<blockType>> extValLst(gpuWorldSize_);
     label localNnz = 0;
     forAll(cpldMatrix.mesh().boundary(), patchi)
     {
@@ -391,41 +429,89 @@ void Foam::coupledCsrMatrix::blkConsInit
     {
     	Info << "Warning: dimension mismatch in interface consolidation" << endl;
     }
-    extValLst[myGpuWorldRank_] = foamExtVals;
-    Pstream::gatherList(extValLst, UPstream::msgType(), gpuWorld_);
+   // extValLst[myGpuWorldRank_] = foamExtVals;
+   // Pstream::gatherList(extValLst, UPstream::msgType(), gpuWorld_);
 
-    if(gpuProc_)
+
+    label consDispl = 0;
+    if (matrix.hasDiag())
     {
-        std::visit([this, &diagPtr](const auto& exec)
-                    { *(diagPtr) = exec.template alloc<scalar>(nC*this->nConsRows_); },
-                    csrMatExec_);
-        std::visit([this, &diagLst, &diagPtr](const auto& exec)
-                    { exec.template concatenate<blockType>(this->nConsRows_, diagLst, *(diagPtr)); },
+        if(!gpuProc_) cudaIpcOpenMemHandle((void**) diagPtr, diagConsHandle, cudaIpcMemLazyEnablePeerAccess );
+        consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+        std::visit([this, matrix, consDispl, &diagPtr, nCells](const auto& exec)
+                    { exec.template concatenate<blockType>(nCells, matrix.diag(), *(diagPtr), consDispl); },
                     coupledCsrMatExec_);
-
-        std::visit([this, &upperPtr](const auto& exec)
-                    { *(upperPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_); },
-                    csrMatExec_);
-        std::visit([this, &upperLst, &upperPtr](const auto& exec)
-                    { exec.template concatenate<blockType>(this->nConsIntFaces_, upperLst, *(upperPtr)); },
-                    coupledCsrMatExec_);
-
-        std::visit([this, &lowerPtr](const auto& exec)
-                    { *(lowerPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_); },
-                    csrMatExec_);
-        std::visit([this, &lowerLst, &lowerPtr](const auto& exec)
-                    { exec.template concatenate<blockType>(this->nConsIntFaces_, lowerLst, *(lowerPtr)); },
-                    coupledCsrMatExec_);
-
-        std::visit([this, &extPtr](const auto& exec)
-                    { *(extPtr) = exec.template alloc<scalar>(nC*this->nConsExtNz_); },
-                    csrMatExec_);
-        std::visit([this, &extValLst, &extPtr](const auto& exec)
-                    { exec.template concatenate<blockType>(this->nConsExtNz_, extValLst, *(extPtr)); },
-                    coupledCsrMatExec_);
+        if(!gpuProc_) cudaIpcCloseMemHandle(*diagPtr);
     }
+    if (matrix.hasUpper())
+    {
+        if(!gpuProc_) cudaIpcOpenMemHandle((void**) upperPtr, upperConsHandle, cudaIpcMemLazyEnablePeerAccess );
+        consDispl = intFacesConsDispPtr_->cdata()[myGpuWorldRank_];
+        std::visit([this, matrix, consDispl, &upperPtr, nIntFaces](const auto& exec)
+                    { exec.template concatenate<blockType>(nIntFaces, matrix.upper(), *(upperPtr), consDispl); },
+                    coupledCsrMatExec_);
+        if(!gpuProc_) cudaIpcCloseMemHandle(*upperPtr);
+    }
+    if (matrix.hasLower())
+    {
+        if(!gpuProc_) cudaIpcOpenMemHandle((void**) lowerPtr, lowerConsHandle, cudaIpcMemLazyEnablePeerAccess );
+        consDispl = intFacesConsDispPtr_->cdata()[myGpuWorldRank_];
+        std::visit([this, matrix, consDispl, &lowerPtr, nIntFaces](const auto& exec)
+                    { exec.template concatenate<blockType>(nIntFaces, matrix.lower(), *(lowerPtr), consDispl); },
+                    coupledCsrMatExec_);
+        if(!gpuProc_) cudaIpcCloseMemHandle(*lowerPtr);
+    }
+    if (nnzExt > 0)
+    {
+        if(!gpuProc_) cudaIpcOpenMemHandle((void**) extPtr, extConsHandle, cudaIpcMemLazyEnablePeerAccess );
+        consDispl = extNzConsDispPtr_->cdata()[myGpuWorldRank_];
+        std::visit([this, consDispl, &extPtr, foamExtVals, nnzExt](const auto& exec)
+                    { exec.template concatenate<blockType>(nnzExt, foamExtVals, *(extPtr), consDispl); },
+                    coupledCsrMatExec_);
+        if(!gpuProc_) cudaIpcCloseMemHandle(*extPtr);
+    }
+    //if(gpuProc_)
+    //{
+    //    if (matrix.hasDiag())
+    //    {
+    //        std::visit([this, &diagPtr](const auto& exec)
+    //                    { *(diagPtr) = exec.template alloc<scalar>(nC*this->nConsRows_); },
+    //                    csrMatExec_);
+    //        std::visit([this, &diagLst, &diagPtr](const auto& exec)
+    //                    { exec.template concatenate<blockType>(this->nConsRows_, diagLst, *(diagPtr)); },
+    //                    coupledCsrMatExec_);
+    //    }
+    //    if (matrix.hasUpper())
+    //    {
+    //        std::visit([this, &upperPtr](const auto& exec)
+    //                    { *(upperPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_); },
+    //                    csrMatExec_);
+    //        std::visit([this, &upperLst, &upperPtr](const auto& exec)
+    //                    { exec.template concatenate<blockType>(this->nConsIntFaces_, upperLst, *(upperPtr)); },
+    //                    coupledCsrMatExec_);
+    //    }
+    //    if (matrix.hasLower())
+    //    {
+    //        std::visit([this, &lowerPtr](const auto& exec)
+    //                    { *(lowerPtr) = exec.template alloc<scalar>(nC*this->nConsIntFaces_); },
+    //                    csrMatExec_);
+    //        std::visit([this, &lowerLst, &lowerPtr](const auto& exec)
+    //                    { exec.template concatenate<blockType>(this->nConsIntFaces_, lowerLst, *(lowerPtr)); },
+    //                    coupledCsrMatExec_);
+    //    }
+    //    std::visit([this, &extPtr](const auto& exec)
+    //                { *(extPtr) = exec.template alloc<scalar>(nC*this->nConsExtNz_); },
+    //                csrMatExec_);
+    //    std::visit([this, &extValLst, &extPtr](const auto& exec)
+    //                { exec.template concatenate<blockType>(this->nConsExtNz_, extValLst, *(extPtr)); },
+    //                coupledCsrMatExec_);
+    //}
 
 
+    if (gpuProc_)
+    {
+        cudaDeviceSynchronize();
+    }
     Pstream::barrier(gpuWorld_);
 }
 
@@ -440,12 +526,13 @@ void Foam::coupledCsrMatrix::fillSource
     const label nVector = matrix.nVect();
     const label nCells = matrix.mesh().nCells();
     //scalar* sourcePtr = nullptr;
-    //label consDispl = 0;
-    if(!isConsolidated())
+    label consDispl = 0;
+    if(isConsolidated())
     {
-    //}
-    //else
-    //{
+    	consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+    }
+    else
+    {
         std::visit([this,nCells](const auto& exec)
                { this->rhsCons_ = exec.template allocZero<scalar>(nBlocks_*nCells); },
                this->csrMatExec_);
@@ -453,72 +540,24 @@ void Foam::coupledCsrMatrix::fillSource
 
     forN(nScalar,j)
     {
-        if(isConsolidated())
-        {
-            List<scalarField> sourceLst(gpuWorldSize_);
-            sourceLst[myGpuWorldRank_] = sSource[j];
-            Pstream::gatherList(sourceLst, UPstream::msgType(), gpuWorld_);
-
-            if(gpuProc_)
-            {
-            	for (label nCons = 0; nCons < gpuWorldSize_; nCons++)
-            	{
-                     label consDispl = rowsConsDispPtr_->cdata()[nCons];
-    	            fillField<scalar>
-    	            (
-                        nCells,
-		            	j,
-		            	sourceLst[nCons],
-		            	&rhsCons_[consDispl*nBlocks_]
-    	            );
-            	}
-            }
-        }
-        else
-        {
-    	    fillField<scalar>
-    	    (
-                nCells,
-		    	j,
-		    	sSource[j],
-		    	rhsCons_
-    	    );
-        }
+    	fillField<scalar>
+    	(
+            nCells,
+			j,
+			sSource[j],
+			&rhsCons_[consDispl*nBlocks_]
+    	);
     }
 
     forN(nVector,j)
     {
-        if(isConsolidated())
-        {
-            List<vectorField> sourceLst(gpuWorldSize_);
-            sourceLst[myGpuWorldRank_] = vSource[j];
-            Pstream::gatherList(sourceLst, UPstream::msgType(), gpuWorld_);
-
-            if(gpuProc_)
-            {
-            	for (label nCons = 0; nCons < gpuWorldSize_; nCons++)
-            	{
-                    label consDispl = rowsConsDispPtr_->cdata()[nCons];
-    	            fillField<vector>
-    	            (
-                        nCells,
-		            	nScalar + 3*j,
-		            	sourceLst[nCons],
-		            	&rhsCons_[consDispl*nBlocks_]
-    	            );
-            	}
-            }
-        }
-        else
-        {
-    	       fillField<vector>
-    	       (
-                nCells,
-		       	nScalar + 3*j,
-		       	vSource[j],
-		       	rhsCons_
-    	       );
-        }
+    	fillField<vector>
+    	(
+            nCells,
+			nScalar + 3*j,
+			vSource[j],
+			&rhsCons_[consDispl*nBlocks_]
+    	);
     }
 }
 
@@ -533,12 +572,13 @@ void Foam::coupledCsrMatrix::fillVariables
     const label nScalar = matrix.nScal();
     const label nVector = matrix.nVect();
 
-    if(!isConsolidated())
+    label consDispl = 0;
+    if(isConsolidated())
     {
-    //    consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
-    //}
-    //else
-    //{
+        consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+    }
+    else
+    {
         std::visit([this,nCells](const auto& exec)
                { this->psiCons_ = exec.template allocZero<scalar>(nBlocks_*nCells); },
                this->csrMatExec_);
@@ -546,72 +586,24 @@ void Foam::coupledCsrMatrix::fillVariables
 
     forN(nScalar,j)
     {
-        if(isConsolidated())
-        {
-            List<scalarField> psiLst(gpuWorldSize_);
-            psiLst[myGpuWorldRank_] = sVolField[j].primitiveField();
-            Pstream::gatherList(psiLst, UPstream::msgType(), gpuWorld_);
-
-            if(gpuProc_)
-            {
-            	for (label nCons = 0; nCons < gpuWorldSize_; nCons++)
-            	{
-                    label consDispl = rowsConsDispPtr_->cdata()[nCons];
-    	            fillField<scalar>
-    	            (
-                        nCells,
-		            	j,
-		            	psiLst[nCons],
-		            	&psiCons_[consDispl*nBlocks_]
-    	            );
-            	}
-            }
-        }
-        else
-        {
-    	    fillField<scalar>
-    	    (
-                nCells,
-		    	j,
-		    	sVolField[j].primitiveField(),
-		    	psiCons_
-    	    );
-        }
+    	 fillField<scalar>
+    	 (
+            nCells,
+		 	j,
+		 	sVolField[j].primitiveField(),
+		 	&psiCons_[consDispl*nBlocks_]
+    	 );
     }
 
     forN(nVector,j)
     {
-        if(isConsolidated())
-        {
-            List<vectorField> psiLst(gpuWorldSize_);
-            psiLst[myGpuWorldRank_] = vVolField[j].primitiveField();
-            Pstream::gatherList(psiLst, UPstream::msgType(), gpuWorld_);
-
-            if(gpuProc_)
-            {
-            	for (label nCons = 0; nCons < gpuWorldSize_; nCons++)
-            	{
-                    label consDispl = rowsConsDispPtr_->cdata()[nCons];
-    	            fillField<vector>
-    	            (
-                        nCells,
-		            	nScalar + 3*j,
-		            	psiLst[nCons],
-		            	&psiCons_[consDispl*nBlocks_]
-    	            );
-            	}
-            }
-        }
-        else
-        {
-    	       fillField<vector>
-    	       (
-                nCells,
-		       	nScalar + 3*j,
-		       	vVolField[j].primitiveField(),
-		       	psiCons_
-    	       );
-        }
+        fillField<vector>
+        (
+            nCells,
+	    	nScalar + 3*j,
+	        vVolField[j].primitiveField(),
+	    	&psiCons_[consDispl*nBlocks_]
+        );
     }
 }
 
@@ -631,32 +623,35 @@ void Foam::coupledCsrMatrix::transferVariables
     scalar* devPtr = nullptr;
     if(isConsolidated())
     {
-        scalarField psiLst(nConsRows_*nBlocks_);
-        labelList nLocalRows(gpuWorldSize_);
-        forAll(nLocalRows, proci)
-        {
-            nLocalRows[proci] = rowsConsDispPtr_->cdata()[proci+1] - rowsConsDispPtr_->cdata()[proci];
-        }
-
-        if(gpuProc_)
-        {
-            scalar* psiPtr = psiLst.data();
-            scalar** psiPPtr = &psiPtr;
-            std::visit([this, &psiPPtr](const auto& exec)
-                { exec.template copyToFoam<scalar>(this->nConsRows_*this->nBlocks_, this->psiCons_, psiPPtr); },
-                csrMatExec_);
-        }
-
-        UPstream::scatter(psiLst.cdata(), nLocalRows*nBlocks_, *rowsConsDispPtr_*nBlocks_, hostPtr, nBlocks_*nLocalRows[myGpuWorldRank_], gpuWorld_);
+    	label consDispl = rowsConsDispPtr_->cdata()[myGpuWorldRank_];
+    	devPtr = &psiCons_[consDispl*nBlocks_];
     }
+//        scalarField psiLst(nConsRows_*nBlocks_);
+//        labelList nLocalRows(gpuWorldSize_);
+//        forAll(nLocalRows, proci)
+//        {
+//            nLocalRows[proci] = rowsConsDispPtr_->cdata()[proci+1] - rowsConsDispPtr_->cdata()[proci];
+//        }
+//
+//        if(gpuProc_)
+//        {
+//            scalar* psiPtr = psiLst.data();
+//            scalar** psiPPtr = &psiPtr;
+//            std::visit([this, &psiPPtr](const auto& exec)
+//                { exec.template copyToFoam<scalar>(this->nConsRows_*this->nBlocks_, this->psiCons_, psiPPtr); },
+//                csrMatExec_);
+//        }
+//
+//        UPstream::scatter(psiLst.cdata(), nLocalRows*nBlocks_, *rowsConsDispPtr_*nBlocks_, hostPtr, nBlocks_*nLocalRows[myGpuWorldRank_], gpuWorld_);
+//    }
     else
     {
     	devPtr = psiCons_;
-        std::visit([this, &hostPtr, &devPtr, nCells](const auto& exec)
-                   { exec.template copyToFoam<scalar>(nCells*this->nBlocks_, devPtr, &hostPtr);},
-                   csrMatExec_);
     }
 
+    std::visit([this, &hostPtr, &devPtr, nCells](const auto& exec)
+               { exec.template copyToFoam<scalar>(nCells*this->nBlocks_, devPtr, &hostPtr);},
+               csrMatExec_);
 
     forN(nScalar,j)
     {

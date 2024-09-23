@@ -164,37 +164,20 @@ void cudaFillField
 template<class Type>
 void Foam::cudaCoupledCsrMatrixExecutor::concatenate
 (
-    label globSize,
-    List<List<Type>> lst,
-    scalar * ptr
+    label size,
+    const Field<Type>& lst,
+    scalar * ptr,
+	label consDispl
 ) const
 {
-    label newStart = 0;
-    label size;
-    const label nC = pTraits<Type>::nComponents;
-
-    for(label i=0; i<lst.size(); ++i)
-    {
-        size = lst[i].size();
-        label err = CHECK_CUDA_ERROR(
-                        cudaMemcpy
-						(
-                            &ptr[newStart*nC],
-							reinterpret_cast<const scalar*>(lst[i].cdata()),
-							(size_t) size*sizeof(scalar)*nC,
-							cudaMemcpyHostToDevice
-						)
-                    );
-        if (err != 0)
-        {
-            FatalErrorInFunction << "ERROR: cudaMemcpy returned " << err << abort(FatalError);
-        }
-        newStart += size;
-        if(newStart > globSize)
-        {
-            FatalErrorInFunction << "Concatenate size mismatch" << nl;
-        }
-    }
+       const label nC = pTraits<Type>::nComponents;
+       label err = CHECK_CUDA_ERROR(
+                   cudaMemcpy(&ptr[consDispl*nC], lst.cdata(), (size_t) size*sizeof(Type), cudaMemcpyHostToDevice)
+               );
+       if (err != 0)
+       {
+           FatalErrorInFunction << "ERROR: cudaMemcpy returned " << err << abort(FatalError);
+       }
 }
 
 template<class Type>
@@ -271,22 +254,43 @@ void Foam::cudaCoupledCsrMatrixExecutor::initializeAndApplyValue
             diag,
             values
         );
+    CHECK_LAST_CUDA_ERROR();
     }
     if (upper)
     {
         numBlocks = (nIntFaces + NUM_THREADS_PER_BLOCK - 1) / NUM_THREADS_PER_BLOCK;
-        cudaInitializeValueUL<<<numBlocks, NUM_THREADS_PER_BLOCK>>>
-        (
-            nBlocks,
-            nCells,
-            nIntFaces,
-	    	nOffsets,
-	    	offsets,
-	    	ldu2csr,
-            upper,
-            lower,
-            values
-        );
+    	if (!lower)
+    	{
+            cudaInitializeValueUL<<<numBlocks, NUM_THREADS_PER_BLOCK>>>
+            (
+                nBlocks,
+                nCells,
+                nIntFaces,
+                nOffsets,
+                offsets,
+                ldu2csr,
+                upper,
+                upper,
+                values
+            );
+    CHECK_LAST_CUDA_ERROR();
+    	}
+    	else
+    	{
+            cudaInitializeValueUL<<<numBlocks, NUM_THREADS_PER_BLOCK>>>
+            (
+                nBlocks,
+                nCells,
+                nIntFaces,
+                nOffsets,
+                offsets,
+                ldu2csr,
+                upper,
+                lower,
+                values
+            );
+    CHECK_LAST_CUDA_ERROR();
+    	}
     }
     if (ext)
     {
@@ -394,22 +398,25 @@ makecudaCoupledCsrMatrixExecutor(Foam::vector)
 template void Foam::cudaCoupledCsrMatrixExecutor::concatenate<Foam::scalar>
 (
     Foam::label globSize,
-    Foam::List<Foam::List<Foam::scalar>> lst,
-    Foam::scalar * ptr
+    const Foam::Field<Foam::scalar> & lst,
+    Foam::scalar * ptr,
+	Foam::label consDispl
 ) const;
 
 template void Foam::cudaCoupledCsrMatrixExecutor::concatenate<Foam::vector>
 (
     Foam::label globSize,
-    Foam::List<Foam::List<Foam::vector>> lst,
-    Foam::scalar * ptr
+    const Foam::Field<Foam::vector> & lst,
+    Foam::scalar * ptr,
+	Foam::label consDispl
 ) const;
 
 template void Foam::cudaCoupledCsrMatrixExecutor::concatenate<Foam::tensor>
 (
     Foam::label globSize,
-    Foam::List<Foam::List<Foam::tensor>> lst,
-    Foam::scalar * ptr
+    const Foam::Field<Foam::tensor> & lst,
+    Foam::scalar * ptr,
+	Foam::label consDispl
 ) const;
 
 // ************************************************************************* //

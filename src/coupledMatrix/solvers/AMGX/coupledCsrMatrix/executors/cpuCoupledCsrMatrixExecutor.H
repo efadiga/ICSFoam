@@ -64,8 +64,9 @@ public:
     void concatenate
     (
         label globSize,
-        List<List<Type>> lst,
-        scalar * ptr
+        const Field<Type>& lst,
+        scalar * ptr,
+		label consDispl
     ) const;
 
     void initializeAndApplyValue

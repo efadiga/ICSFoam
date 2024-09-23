@@ -81,8 +81,9 @@ template<class Type>
 void Foam::cpuCoupledCsrMatrixExecutor::concatenate
 (
     label globSize,
-    List<List<Type>> lst,
-    scalar * ptr
+    const Field<Type>& lst,
+    scalar * ptr,
+	label consDispl
 ) const
 {
 	NotImplemented;
@@ -181,20 +182,23 @@ makecpuCoupledCsrMatrixExecutor(Foam::vector)
 template void Foam::cpuCoupledCsrMatrixExecutor::concatenate<Foam::scalar>
 (
     Foam::label globSize,
-    Foam::List<Foam::List<Foam::scalar>> lst,
-    Foam::scalar * ptr
+    const Foam::Field<Foam::scalar>& lst,
+    Foam::scalar * ptr,
+    Foam::label consDispl
 ) const;
 
 template void Foam::cpuCoupledCsrMatrixExecutor::concatenate<Foam::vector>
 (
     Foam::label globSize,
-    Foam::List<Foam::List<Foam::vector>> lst,
-    Foam::scalar * ptr
+	const Foam::Field<Foam::vector>& lst,
+    Foam::scalar * ptr,
+    Foam::label consDispl
 ) const;
 
 template void Foam::cpuCoupledCsrMatrixExecutor::concatenate<Foam::tensor>
 (
     Foam::label globSize,
-    Foam::List<Foam::List<Foam::tensor>> lst,
-    Foam::scalar * ptr
+	const Foam::Field<Foam::tensor>& lst,
+    Foam::scalar * ptr,
+    Foam::label consDispl
 ) const;
