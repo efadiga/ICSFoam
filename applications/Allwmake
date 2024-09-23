@@ -1,6 +1,7 @@
 #!/bin/sh
 
 wmake $(WM_ARGUMENTS) solvers/dbnsFoam
+wmake $(WM_ARGUMENTS) solvers/pUCoupledFoam
 wmake $(WM_ARGUMENTS) solvers/dbnsFullyImplicitHBFoam
 wmake $(WM_ARGUMENTS) solvers/reconstructHBFoam
 
