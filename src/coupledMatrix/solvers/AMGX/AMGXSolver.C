@@ -251,74 +251,176 @@ residualsIO AMGXSolver::solve
     const int nScalar = this->matrix().nScal();
     const int nVector = this->matrix().nVect();
 	residualsIO solverPerf(nScalar,nVector);
-	NotImplemented;
-return solverPerf;}
-//    const fvMesh& fvm = dynamicCast<const fvMesh>(this->matrix_.mesh().thisDb());
-//
-//    label nCells = this->matrix_.mesh().nCells();
-//
-//    const linearSolverContextTable<AmgXLinearSolverContext<coupledCsrMatrix>>& contexts =
-//        linearSolverContextTable<AmgXLinearSolverContext<coupledCsrMatrix>>::New(fvm);
-//
-//    AmgXLinearSolverContext<coupledCsrMatrix>& ctx = contexts.getContext("flowSolver");
-//
-//    if (!ctx.loaded())
-//    {
-//        FatalErrorInFunction
-//            << "Could not initialize AMGx" << nl << abort(FatalError);
-//    }
-//
-//    AmgXWrapper& amgx = ctx.amgx_;
-//
-//    coupledCsrMatrix& Amat = ctx.Amat_;
-//
-//    label nGlobalCells;
-//
-//    if(!Pstream::parRun())
-//    {
-//        nGlobalCells = nCells;
-//        Amat.applyPermutation(this->matrix_);
-//    }
-//    /*else
-//    {
-//        if(!Amat.hasPermutation()) buildAndApplyMatrixPermutation(&Amat, nGlobalCells);
-//        else applyMatrixPermutation(&Amat, nGlobalCells);
-//    }*/
-//
-//    label nnz = Amat.nnz();
-//
-//    if(!ctx.initialized())
-//    {
-//        Info<< "Initializing AmgX Linear Solver " << eqName_ << nl;
-//
-//        amgx.setOperator(nGlobalCells, &Amat);
-//
-//        // Amat.clearAddressing();
-//
-//        ctx.initialized() = true;
-//    }
-//    else
-//    {
-//        amgx.updateOperator(&Amat);
-//    }
-//
-//    amgx.solve(psi.data(), source.cdata(), &Amat);
-//
-//    scalarField iNorm(nScalar+3*nVector, 0.0);
-//    amgx.getResidual(0, iNorm);
-//    solverPerf.initialResidual() = iNorm[0];
-//
-//    label nIters = 0;
-//    amgx.getIters(nIters);
-//    solverPerf.nIterations() = nIters;
-//
-//    scalarField fNorm(nScalar+3*nVector, 0.0);
-//    amgx.getResidual(nIters, fNorm);
-//    solverPerf.finalResidual() = fNorm[0];
-//
-//    return solverPerf;
-//
-//}
+
+    // Allocate temp storage
+    PtrList<scalarField> sTmp(nScalar);
+    PtrList<vectorField> vTmp(nVector);
+
+    forN(nScalar,j)
+    {
+        sTmp.set(j, new scalarField(sW[j].size(), 0.0));
+    }
+
+    forN(nVector,j)
+    {
+    	vTmp.set(j, new vectorField(vW[j].size(), Zero));
+    }
+
+    scalarList sNormFactor(nScalar);
+    List<vector> vNormFactor(nVector);
+
+    this->normFactors(sW,vW,sSource,vSource,sNormFactor,vNormFactor);
+
+    // Calculate initial residual
+    matrix_.matrixMul(sW, vW, sTmp, vTmp);
+
+    // Approximate initial residual
+    forN(nScalar,i) sTmp[i] = sSource[i] - sTmp[i];
+    forN(nVector,i) vTmp[i] = vSource[i] - vTmp[i];
+
+    forAll(sNormFactor, i)
+    {
+        solverPerf.sInitRes()[i] = gSumMag(sTmp[i]) / sNormFactor[i];
+        solverPerf.sFinalRes()[i] = solverPerf.sInitRes()[i];
+    }
+
+    // Use vector magnitude for normalisation
+    forAll(vNormFactor, i)
+    {
+    	solverPerf.vInitRes()[i] = cmptDivide(gSum(cmptMag(vTmp[i])),vNormFactor[i]);
+        solverPerf.vFinalRes()[i] = solverPerf.vInitRes()[i];
+    }
+
+    /// AMGX SOLUTION START ///
+
+    const fvMesh& fvm = dynamicCast<const fvMesh>(this->matrix_.mesh().thisDb());
+
+    label nCells = this->matrix_.mesh().nCells();
+
+    const linearSolverContextTable<AmgXLinearSolverContext<coupledCsrMatrix>>& contexts =
+        linearSolverContextTable<AmgXLinearSolverContext<coupledCsrMatrix>>::New(fvm);
+
+    AmgXLinearSolverContext<coupledCsrMatrix>& ctx = contexts.getContext("flowSolver",typeName);
+
+    if (!ctx.loaded())
+    {
+        FatalErrorInFunction
+            << "Could not initialize AMGx" << nl << abort(FatalError);
+    }
+
+    AmgXWrapper& amgx = ctx.amgx_;
+
+    coupledCsrMatrix& Amat = ctx.Amat_;
+
+    label nGlobalCells;
+
+    if(!ctx.initialized())
+    {
+        if(Pstream::parRun()) amgx.initialiseMatrixComms(&Amat);
+        else Amat.setGpuProc(true);
+    }
+    nGlobalCells = Amat.applyPermutation(this->matrix_);
+    //}
+    /*else
+    {
+        if(!Amat.hasPermutation()) buildAndApplyMatrixPermutation(&Amat, nGlobalCells);
+        else applyMatrixPermutation(&Amat, nGlobalCells);
+    }*/
+
+    if(!ctx.initialized())
+    {
+        Info<< "Initializing AmgX Linear Solver (Coupled)"  << nl;
+
+        amgx.setOperator(nGlobalCells, &Amat);
+
+        Amat.clearAddressing();
+
+        ctx.initialized() = true;
+        amgx.updateOperator(&Amat);
+    }
+    else
+    {
+        amgx.updateOperator(&Amat);
+    }
+
+    Info << "Allocating source on the device" << endl;
+    //Amat.allocSource(this->matrix());
+    //Amat.allocVariables(this->matrix());
+
+    Amat.fillSource(this->matrix(),sSource,vSource);
+    Info << "Allocating variables on the device" << endl;
+    Amat.fillVariables(this->matrix(),sW,vW);
+
+    Info << "Solving " << endl;
+    amgx.solve(&Amat);
+
+    //Amat.clearSource();
+
+    Amat.transferVariables(this->matrix(),sW,vW);
+    //Amat.clearVariables();
+
+    scalarField iNorm(nScalar+3*nVector, 0.0);
+    amgx.getResidual(0, iNorm, Amat.nBlocks());
+    //solverPerf.initialResidual() = iNorm[0];
+
+    Info << "AMGX initial residual: " << iNorm << endl;
+
+    label nIters = 0;
+    amgx.getIters(nIters);
+    //solverPerf.nIterations() = nIters;
+    Info << "AMGX nIterations: " << nIters << endl;
+
+    scalarField fNorm(nScalar+3*nVector, 0.0);
+    amgx.getResidual(nIters, fNorm, Amat.nBlocks());
+    //solverPerf.finalResidual() = fNorm[0];
+
+    Info << "AMGX final residual: " << fNorm << endl;
+
+    /// AMGX SOLUTION END ///
+
+        // Re-calculate the residual
+		this->matrix_.matrixMul(sW, vW, sTmp, vTmp);
+
+        forN(nScalar,j)
+        {
+            forAll(sTmp[j], iCell)
+            {
+                sTmp[j][iCell] = sSource[j][iCell] - sTmp[j][iCell];
+            }
+        }
+        forN(nVector,j)
+        {
+            forAll(vTmp[j], iCell)
+            {
+                vTmp[j][iCell] = vSource[j][iCell] - vTmp[j][iCell];
+            }
+        }
+
+        forN(nScalar,i)
+        {
+        	solverPerf.sFinalRes()[i] = gSumMag(sTmp[i]) / sNormFactor[i];
+        }
+
+        forN(nVector,i)
+        {
+            vector res = cmptDivide(gSum(cmptMag(vTmp[i])),vNormFactor[i]);
+
+            // Zero the residual in non-solved directions
+            vector::labelType validComponents = this->matrix_.mesh().solutionD(); //-1 for empty directions
+
+            forAll(validComponents, cmpt)
+            {
+                if (validComponents[cmpt] == -1)
+                {
+                    res[cmpt] = 0.0;
+                }
+            }
+
+            solverPerf.vFinalRes()[i] = res;
+        }
+
+    return solverPerf;
+}
 
 residualsIO AMGXSolver::solveDelta
 (
