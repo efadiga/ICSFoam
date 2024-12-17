@@ -6,7 +6,7 @@
      \\/     M anipulation  |
 -------------------------------------------------------------------------------
     Copyright (C) 2011-2017 OpenFOAM Foundation
-    Copyright (C) 2019-2023 OpenCFD Ltd.
+    Copyright (C) 2019-2024 OpenCFD Ltd.
 -------------------------------------------------------------------------------
 License
     This file is part of OpenFOAM.
@@ -92,7 +92,21 @@ Foam::cyclicAMIFvPatchField<Type>::cyclicAMIFvPatchField
     {
         if (this->coupled())
         {
+            // Tricky: avoid call to evaluate without call to initEvaluate.
+            // For now just disable the localConsistency to make it use the
+            // old logic (ultimately calls the fully self contained
+            // patchNeighbourField)
+
+            int& consistency =
+                GeometricField<Type, fvPatchField, volMesh>::
+                Boundary::localConsistency;
+
+            const int oldConsistency = consistency;
+            consistency = 0;
+
             this->evaluate(UPstream::commsTypes::nonBlocking);
+
+            consistency = oldConsistency;
         }
         else
         {
@@ -478,13 +492,26 @@ void Foam::cyclicAMIFvPatchField<Type>::initEvaluate
 
         // Start sending
 
-        // By-pass polyPatch to get nbrId. Instead use cyclicAMIFvPatch virtual
-        // neighbPatch()
+        // By-pass polyPatch to get nbrId.
+        // - use cyclicACMIFvPatch::neighbPatch() virtual instead
         const cyclicAMIFvPatch& neighbPatch = cyclicAMIPatch_.neighbPatch();
         const labelUList& nbrFaceCells = neighbPatch.faceCells();
         const Field<Type> pnf(this->primitiveField(), nbrFaceCells);
 
         const cyclicAMIPolyPatch& cpp = cyclicAMIPatch_.cyclicAMIPatch();
+
+        // Assert that all receives are known to have finished
+        if (!recvRequests_.empty())
+        {
+            FatalErrorInFunction
+                << "Outstanding recv request(s) on patch "
+                << cyclicAMIPatch_.name()
+                << " field " << this->internalField().name()
+                << abort(FatalError);
+        }
+
+        // Assume that sends are also OK
+        sendRequests_.clear();
 
         cpp.initInterpolate
         (
@@ -548,6 +575,10 @@ void Foam::cyclicAMIFvPatchField<Type>::evaluate
                 defaultValues
             ).ptr()
         );
+
+        // Receive requests all handled by last function call
+        recvRequests_.clear();
+
         auto& patchNeighbourField = patchNeighbourFieldPtr_.ref();
 
         if (doTransform())
@@ -594,6 +625,19 @@ void Foam::cyclicAMIFvPatchField<Type>::initInterfaceMatrixUpdate
         transformCoupleField(pnf, cmpt);
 
         const cyclicAMIPolyPatch& cpp = cyclicAMIPatch_.cyclicAMIPatch();
+
+        // Assert that all receives are known to have finished
+        if (!recvRequests_.empty())
+        {
+            FatalErrorInFunction
+                << "Outstanding recv request(s) on patch "
+                << cyclicAMIPatch_.name()
+                << " field " << this->internalField().name()
+                << abort(FatalError);
+        }
+
+        // Assume that sends are also OK
+        sendRequests_.clear();
 
         cpp.initInterpolate
         (
@@ -656,6 +700,9 @@ void Foam::cyclicAMIFvPatchField<Type>::updateInterfaceMatrix
                 scalarRecvBufs_,
                 defaultValues
             );
+
+        // Receive requests all handled by last function call
+        recvRequests_.clear();
     }
     else
     {
@@ -713,6 +760,19 @@ void Foam::cyclicAMIFvPatchField<Type>::initInterfaceMatrixUpdate
         transformCoupleField(pnf);
 
         const cyclicAMIPolyPatch& cpp = cyclicAMIPatch_.cyclicAMIPatch();
+
+        // Assert that all receives are known to have finished
+        if (!recvRequests_.empty())
+        {
+            FatalErrorInFunction
+                << "Outstanding recv request(s) on patch "
+                << cyclicAMIPatch_.name()
+                << " field " << this->internalField().name()
+                << abort(FatalError);
+        }
+
+        // Assume that sends are also OK
+        sendRequests_.clear();
 
         cpp.initInterpolate
         (
@@ -774,6 +834,9 @@ void Foam::cyclicAMIFvPatchField<Type>::updateInterfaceMatrix
                 recvBufs_,
                 defaultValues
             );
+
+        // Receive requests all handled by last function call
+        recvRequests_.clear();
     }
     else
     {
