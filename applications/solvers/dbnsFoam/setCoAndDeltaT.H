@@ -40,17 +40,20 @@ tmp< volScalarField > gamma = pThermo->gamma();
 const volScalarField& psi = pThermo->psi();
 tmp< surfaceScalarField > lambda;
 
+tmp<surfaceScalarField> tmpUSfMagSf = fvc::interpolate(U) & mesh.Sf()/mesh.magSf();
+tmpUSfMagSf.ref().setOriented(true);
+
 if (mesh.moving())
 {
 	lambda = fvc::interpolate(sqrt(gamma()/psi))
-				+ mag((fvc::interpolate(U) & mesh.Sf()/mesh.magSf())
+				+ mag(tmpUSfMagSf
 				- flux.MRFFaceVelocity()
 				- fvc::meshPhi(U)/mesh.magSf());
 }
 else
 {
 	 lambda = fvc::interpolate(sqrt(gamma()/psi))
-				+ mag((fvc::interpolate(U) & mesh.Sf()/mesh.magSf())
+				+ mag(tmpUSfMagSf
 				- flux.MRFFaceVelocity());
 }
 

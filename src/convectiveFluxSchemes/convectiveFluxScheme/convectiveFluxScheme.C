@@ -510,17 +510,20 @@ void convectiveFluxScheme::addDissipationJacobian(coupledMatrix& cMatrix) const
 		dimensionedScalar("lambdaConv", dimVelocity, 0.0)
 	);
 
-	if (mesh_.moving())
+	tmp<surfaceScalarField> tmpUSfMagSf = fvc::interpolate(U_) & mesh_.Sf()/mesh_.magSf();
+    tmpUSfMagSf.ref().setOriented(true);
+
+    if (mesh_.moving())
 	{
 		lambdaConv = (fvc::interpolate(c)
-						+ mag((fvc::interpolate(U_) & mesh_.Sf()/mesh_.magSf())
+						+ mag(tmpUSfMagSf
 						- MRFFaceVelocity()
 						- fvc::meshPhi(U_)/mesh_.magSf()));
 	}
 	else
 	{
 		lambdaConv = (fvc::interpolate(c)
-						+ mag((fvc::interpolate(U_) & mesh_.Sf()/mesh_.magSf())
+						+ mag(tmpUSfMagSf
 						- MRFFaceVelocity()
 					  ));
 	}
