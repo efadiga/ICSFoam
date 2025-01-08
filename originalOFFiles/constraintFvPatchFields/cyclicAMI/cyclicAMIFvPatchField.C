@@ -358,11 +358,13 @@ Foam::cyclicAMIFvPatchField<Type>::patchNeighbourField
 template<class Type>
 bool Foam::cyclicAMIFvPatchField<Type>::cacheNeighbourField()
 {
-    return
-    (
-        GeometricField<Type, fvPatchField, volMesh>::Boundary::localConsistency
-     != 0
-    );
+    //return
+    //(
+    //    GeometricField<Type, fvPatchField, volMesh>::Boundary::localConsistency
+    // != 0
+    //);
+	//WARNING: REMOVING CACHING
+	return false;
 }
 
 
