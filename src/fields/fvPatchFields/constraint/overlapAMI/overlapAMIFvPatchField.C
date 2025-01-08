@@ -217,7 +217,28 @@ void Foam::overlapAMIFvPatchField<Type>::updateInterfaceMatrix
     const Pstream::commsTypes
 ) const
 {
-	NotImplemented;
+    const labelList& nbrFaceCells =
+                    lduAddr.patchAddr
+                    (
+                        overlapAMIPatch_.overlapAMIPatch().neighbPatchID()
+                    );
+
+    solveScalarField pnf(psiInternal, nbrFaceCells);
+
+    if (overlapAMIPatch_.applyLowWeightCorrection())
+    {
+        solveScalarField pif(psiInternal, overlapAMIPatch_.faceCells());
+        pnf = overlapAMIPatch_.interpolate(pnf, pif);
+    }
+    else
+    {
+        pnf = overlapAMIPatch_.interpolate(pnf);
+    }
+
+    const labelUList& faceCells = lduAddr.patchAddr(patchId);
+
+    // Multiply the field by coefficients and add into the result
+    this->addToInternalField(result, !add, faceCells, coeffs, pnf);
 }
 
 
