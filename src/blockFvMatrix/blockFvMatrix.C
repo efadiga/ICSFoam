@@ -417,6 +417,13 @@ void Foam::blockFvMatrix<sourceType,blockType>::Amul
 					   Apsi[faceCells[facei]] += dot(pdSByS[facei],pdS[facei]);
 				   }
 			   }
+			       if(psi.boundaryField()[patchi].coupledDeleteRecv())
+			       {
+			        // if (debug)
+			        // {
+			       //	  Info << "deleting Recv requests (ugly)"
+			        // }
+			       }
 		   }
 		}
 	}
@@ -482,6 +489,13 @@ void Foam::blockFvMatrix<sourceType,blockType>::Amul
 						   Apsi[faceCells[facei]] += dot(pdSByS[facei],pdS[facei]);
 					   }
 				   }
+			       if(psi.boundaryField()[interfacei].coupledDeleteRecv())
+			       {
+			    	 // if (debug)
+			    	 // {
+			    	//	  Info << "deleting Recv requests (ugly)"
+			    	 // }
+			       }
 			   }
 		   }
 		}
@@ -542,6 +556,13 @@ void Foam::blockFvMatrix<sourceType,blockType>::Amul
 									   Apsi[faceCells[facei]] += dot(pdSByS[facei],pdS[facei]);
 								   }
 							   }
+			               if(psi.boundaryField()[interfacei].coupledDeleteRecv())
+			               {
+			            	 // if (debug)
+			            	 // {
+			            	//	  Info << "deleting Recv requests (ugly)"
+			            	 // }
+			               }
 					   }
 				   }
 			   }
@@ -587,6 +608,13 @@ void Foam::blockFvMatrix<sourceType,blockType>::Amul
 					   Apsi[faceCells[facei]] += dot(pdSByS[facei],pdS[facei]);
 					}
 				}
+			    if(psi.boundaryField()[interfacei].coupledDeleteRecv())
+			    {
+			     // if (debug)
+			     // {
+			    //	  Info << "deleting Recv requests (ugly)"
+			     // }
+			    }
 			}
 		}
 	}
@@ -686,6 +714,13 @@ void Foam::blockFvMatrix<sourceType,blockType>::AmulNoDiag
 					   Apsi[faceCells[facei]] += dot(pdSByS[facei],pdS[facei]);
 				   }
 			   }
+			    if(psi.boundaryField()[patchi].coupledDeleteRecv())
+			    {
+			     // if (debug)
+			     // {
+			    //	  Info << "deleting Recv requests (ugly)"
+			     // }
+			    }
 		   }
 		}
 	}
@@ -751,6 +786,13 @@ void Foam::blockFvMatrix<sourceType,blockType>::AmulNoDiag
 						   Apsi[faceCells[facei]] += dot(pdSByS[facei],pdS[facei]);
 					   }
 				   }
+			       if(psi.boundaryField()[interfacei].coupledDeleteRecv())
+			       {
+			        // if (debug)
+			        // {
+			       //	  Info << "deleting Recv requests (ugly)"
+			        // }
+			       }
 			   }
 		   }
 		}

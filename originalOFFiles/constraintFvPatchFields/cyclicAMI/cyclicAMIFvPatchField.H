@@ -238,6 +238,11 @@ public:
         //  is not coupled() - the points don't align.
         virtual bool coupled() const { return cyclicAMIPatch_.coupled(); }
 
+        virtual bool coupledDeleteRecv() const
+	    {
+            recvRequests_.clear();
+	    	return cyclicAMIPatch_.coupled();
+	    }
         //- Are all (receive) data available?
         virtual bool ready() const;
 
@@ -365,7 +370,6 @@ public:
             {
                 return pTraits<Type>::rank;
             }
-
 
         // I-O
 
