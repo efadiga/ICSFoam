@@ -1,0 +1,7 @@
+coupledMatrix/solvers/AMGX/coupledCsrMatrix/executors/cudaCoupledCsrMatrixExecutor.cu
+coupledMatrix/solvers/AMGX/coupledCsrMatrix/executors/cpuCoupledCsrMatrixExecutor.C
+coupledMatrix/solvers/AMGX/coupledCsrMatrix/coupledCsrMatrixFunctions.C
+coupledMatrix/solvers/AMGX/AMGXSolver.C
+coupledMatrix/solvers/AMGX/coupledAmgXLinearSolverContext.C
+coupledMatrix/solvers/AMGX/coupledLinearSolverContextTable.C
+

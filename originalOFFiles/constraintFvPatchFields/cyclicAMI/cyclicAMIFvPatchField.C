@@ -327,7 +327,8 @@ Foam::cyclicAMIFvPatchField<Type>::patchNeighbourField
 				const fvMesh& mesh = this->patch().boundaryMesh().mesh();
 				const vectorField& Ui = mesh.objectRegistry::lookupObject<volVectorField>("U").primitiveField();
 				vectorField Up(Ui, nbrFaceCells);
-				vectorField UpInterp = cyclicAMIPatch_.interpolate(Up);
+				tmp<vectorField> UpInterpTmp = cyclicAMIPatch_.interpolate(Up);
+				vectorField& UpInterp = UpInterpTmp.ref();
 
 				UpInterp = transform(forwardT(), UpInterp);
 

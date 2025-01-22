@@ -1,9 +1,9 @@
 #!/bin/sh
 
-wmake $(WM_ARGUMENTS) solvers/dbnsFoam
-wmake $(WM_ARGUMENTS) solvers/pUCoupledFoam
-wmake $(WM_ARGUMENTS) solvers/dbnsFullyImplicitHBFoam
-wmake $(WM_ARGUMENTS) solvers/reconstructHBFoam
+wmake solvers/dbnsFoam
+wmake solvers/pUCoupledFoam
+wmake solvers/dbnsFullyImplicitHBFoam
+wmake solvers/reconstructHBFoam
 
 cd utilities && { ./Allwmake; cd ..; }
 

@@ -10,10 +10,23 @@ printHelp()
     echo "  -h       | -help           : Show help"
     echo "  -cu [N]  | -cuda [N]       : Compile with cuda enabled and compute"
     echo "                               capability N if specified"
+    echo "  -am      | -amgx           : Compile AMGx solver"
     echo "  -cl      | -clean          : Launch wclean script in all subfolders"
     echo "  -jN      | -j N | -j       : Compile using all or specified N"
     echo "                               cores / hyperthreads"
     echo ""
+};
+
+# Create files list
+createFileList()
+{
+    cd src/Make
+    if [[ "${have_amgx}" == "true" ]]; then :
+        cat files.amgx files.in > files
+    else
+        cat files.in > files
+    fi
+    cd ../..
 };
 
 #------------------------------------------------------------------------------
@@ -25,6 +38,7 @@ export NVARCH=80
 
 # Default options
 export have_cuda=false
+export have_amgx=false
 export LAUNCH_WCLEAN=false
 export WM_ARGUMENTS=""
 
@@ -61,6 +75,10 @@ do
             esac
             ;;
 
+        # Compile AMGx version
+        -am | -amgx*)
+            export have_amgx=true
+            ;;
 
         # Clean all subdirectories
         -cl | -clean*)
@@ -123,7 +141,21 @@ if [[ ${LAUNCH_WCLEAN} == "true" ]]; then :
     exit
 fi
 
+# Check if AmgX folder is valid
+if [[ "${have_amgx}" == "true" ]]; then :
+    if [[ ! -d "${AMGX_INC}" ]]; then :
+        echo "ERROR: Environment variable \"AMGX_INC\" does not point to a valid folder."
+        echo "Please set up AMGX_INC so that it points to AmgX include folder."
+        exit 1
+    fi
+    if [[ ! -d "${AMGX_LIB}" ]]; then :
+        echo "ERROR: Environment variable \"AMGX_LIB\" does not point to a valid folder."
+        echo "Please set up AMGX_LIB so that it points to AmgX build folder."
+        exit 1
+    fi
+fi
 
+createFileList
 #------------------------------------------------------------------------------
 # Launch installation
 #------------------------------------------------------------------------------
